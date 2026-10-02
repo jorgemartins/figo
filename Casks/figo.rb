@@ -1,7 +1,7 @@
 cask "figo" do
   # `version` and `sha256` are updated by scripts/release.sh --publish.
-  version "0.1.0"
-  sha256 "fa07a3a35eec6f73b0e27f55987e8cbdcf37169d564fd37b96ca879b3ef829bd"
+  version "0.1.1"
+  sha256 "6a61242f2a9263d197a8a9d6046af00996d7b4cd027e67ae51e42d2dc158ac2c"
 
   url "https://github.com/jorgemartins/figo/releases/download/v#{version}/Figo.zip"
   name "Figo"
