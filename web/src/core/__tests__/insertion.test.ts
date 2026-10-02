@@ -110,6 +110,64 @@ describe("UI doc §4.8 table", () => {
 });
 
 describe("insertion details", () => {
+  it("never offers to run a line that has a dangerous option or argument (review L20)", async () => {
+    const autoExecute = (h: ReturnType<typeof harness>) =>
+      h.core.getState().suggestions.filter((s) => s.type === "auto-execute").map((s) => s.names[0]);
+    const h = harness();
+    await h.typeOut("rm -rf apps/");
+    expect(autoExecute(h)).toEqual([]);
+    await h.typeOut("rm -rf apps", "");
+    expect(autoExecute(h)).toEqual([]);
+    await h.press("insertSelected");
+    expect(h.bridge.inserts()).toEqual(["/"]);
+    // Without a dangerous option the line may still run from the list.
+    await h.typeOut("rm apps/", "");
+    expect(autoExecute(h)).toEqual(["↪"]);
+
+    const bridge = monorepoBridge();
+    bridge.settings = { "autocomplete.immediatelyRunDangerousCommands": true };
+    const allowed = harness(bridge);
+    await allowed.typeOut("rm -rf apps/");
+    expect(autoExecute(allowed)).toEqual(["↪"]);
+  });
+
+  it("never offers to run a line that holds more than the command being completed (review 2, item 5)", async () => {
+    const autoExecute = (h: ReturnType<typeof harness>) =>
+      h.core.getState().suggestions.filter((s) => s.type === "auto-execute").map((s) => s.names[0]);
+    const h = harness();
+    // The newline would run `rm -rf target` too.
+    await h.typeOut("rm -rf target && cd apps/");
+    expect(autoExecute(h)).toEqual([]);
+    await h.typeOut("rm -rf target && cd apps", "");
+    expect(autoExecute(h)).toEqual([]);
+    // Text after the cursor runs as well.
+    h.bridge.type("cd apps/ && rm -rf target", "cd apps/".length);
+    await h.idle();
+    expect(autoExecute(h)).toEqual([]);
+    await h.typeOut("echo $(rm -rf target) apps/", "");
+    expect(autoExecute(h)).toEqual([]);
+    // A plain line still may.
+    await h.typeOut("cd apps/", "");
+    expect(autoExecute(h)).toEqual(["↪"]);
+
+    const bridge = monorepoBridge();
+    bridge.settings = { "autocomplete.immediatelyRunDangerousCommands": true };
+    const allowed = harness(bridge);
+    await allowed.typeOut("rm -rf target && cd apps/");
+    expect(autoExecute(allowed)).toEqual(["↪"]);
+  });
+
+  it("remembers a dangerous argument already given (review 2, item 5)", async () => {
+    const spec: Fig.Spec = {
+      name: "wipe",
+      args: [{ name: "victim", isDangerous: true }, { name: "destination", template: "folders" }],
+    };
+    const h = harness(monorepoBridge(), withSpecs({ wipe: spec }));
+    await h.typeOut("wipe target apps/");
+    expect(h.core.getState().suggestions.map((s) => s.type)).not.toContain("auto-execute");
+    expect(shown(h.core)).toEqual(["api/", "web/", "../"]);
+  });
+
   it("keeps what was typed when the insertion starts with it", async () => {
     const h = harness(monorepoBridge(), {}, HOME);
     await h.typeOut("cd Si");
@@ -137,7 +195,25 @@ describe("insertion details", () => {
     expect(escapeInsertion("a;b", false)).toBe("'a;b'");
     expect(escapeInsertion("a b", false)).toBe("a\\ b");
     expect(escapeInsertion("$HOME", false)).toBe("'$HOME'");
-    expect(escapeInsertion("--out={cursor}", false)).toBe("--out={cursor}");
+    // Braces expand (`{a,b}`); `~` and zsh's `=` expand at the start of a word (review L19).
+    expect(escapeInsertion("{a,b}", false)).toBe("'{a,b}'");
+    expect(escapeInsertion("~backup", false)).toBe("'~backup'");
+    expect(escapeInsertion("=cmd", false)).toBe("'=cmd'");
+    expect(escapeInsertion("a~b=c", false)).toBe("a~b=c");
+    // Only an ASCII space separates words; other spaces are part of the name.
+    expect(escapeInsertion("a b", false)).toBe("a b");
+  });
+
+  it("types a file whose name starts with a dash as ./-name, so it is not an option", async () => {
+    const bridge = monorepoBridge().setDirectory(MONO, ["-rf", "notes.txt"]);
+    const h = harness(bridge);
+    await h.typeOut("cat ");
+    await select(h, "-rf");
+    await h.press("insertSelected");
+    // After a directory part the name is not at the start of the word.
+    await h.typeOut("cat ./-", "");
+    await h.press("insertSelected");
+    expect(bridge.inserts()).toEqual(["./-rf", "rf"]);
   });
 
   it("honours {cursor} in an insert value and does not escape insert values", async () => {
@@ -206,6 +282,108 @@ describe("insertion details", () => {
   });
 });
 
+describe("inside a quote opened before a directory (review H7)", () => {
+  function quoteBridge() {
+    return monorepoBridge().setDirectory(`${MONO}/src`, [
+      "My File.txt",
+      "My Dir/",
+      "it's.txt",
+      "a$b.txt",
+      "a!b.txt",
+      "Shot (1).png",
+      "Shot (2).png",
+    ]);
+  }
+
+  async function complete(line: string, name: string, action = "insertSelected") {
+    const bridge = quoteBridge();
+    const h = harness(bridge);
+    await h.set(line);
+    await h.press("showAutocomplete");
+    if (action === "insertSelected") {
+      await select(h, name);
+    }
+    await h.press(action);
+    const { buffer } = bridge.echoLastInsert();
+    return { buffer, inserted: bridge.inserts(), word: getCommand(buffer)?.tokens.at(-1) };
+  }
+
+  it("types a file escaped for the double quote and closes it", async () => {
+    const { buffer, word } = await complete('cat "src/My F', "My File.txt");
+    expect(buffer).toBe('cat "src/My File.txt"');
+    expect(word).toMatchObject({ text: "src/My File.txt", complete: true });
+  });
+
+  it("writes a single quote inside single quotes as '\\''", async () => {
+    const { buffer, word } = await complete("cat 'src/it", "it's.txt");
+    expect(buffer).toBe("cat 'src/it'\\''s.txt'");
+    expect(word).toMatchObject({ text: "src/it's.txt", complete: true });
+  });
+
+  it("escapes $ so it does not expand inside double quotes", async () => {
+    const { buffer } = await complete('cat "src/a', "a$b.txt");
+    expect(buffer).toBe('cat "src/a\\$b.txt"');
+  });
+
+  it("closes the quote first when the name cannot be written inside it", async () => {
+    const { buffer, word } = await complete('cat "src/a', "a!b.txt");
+    expect(buffer).toBe(`cat "src/"'a!b.txt'`);
+    expect(word).toMatchObject({ text: "src/a!b.txt", complete: true });
+  });
+
+  it("leaves the quote open after a folder, so the path can go on", async () => {
+    const { buffer, word } = await complete('cd "src/My D', "My Dir/");
+    expect(buffer).toBe('cd "src/My Dir/');
+    expect(word).toMatchObject({ text: "src/My Dir/", complete: false });
+  });
+
+  it("inserts the shared prefix inside the quote too", async () => {
+    const { buffer, word } = await complete('cat "src/Sh', "", "insertCommonPrefix");
+    expect(buffer).toBe('cat "src/Shot (');
+    expect(word).toMatchObject({ text: "src/Shot (" });
+  });
+
+  it("knows the quote at the start of what it replaces, after an earlier Tab reopened one", async () => {
+    const bridge = monorepoBridge().setDirectory(`${MONO}/src`, ["it's a.txt", "it's b.txt"]);
+    const h = harness(bridge);
+    await h.set("cat 'src/it");
+    await h.press("showAutocomplete");
+    await h.press("insertCommonPrefix");
+    expect(await h.echo()).toBe("cat 'src/it'\\''s ");
+    await h.press("insertSelected");
+    const { buffer } = bridge.echoLastInsert();
+    expect(buffer).toBe("cat 'src/it'\\''s a.txt'");
+    expect(getCommand(buffer)?.tokens.at(-1)).toMatchObject({ text: "src/it's a.txt", complete: true });
+  });
+
+  it("quotes for fish when the session's shell is fish (review 2, item 2)", async () => {
+    const name = "a\\'; printf INJECTED; #";
+    const bridge = monorepoBridge().setDirectory(`${MONO}/src`, [name, "it's a.txt", "it's b.txt"]);
+    const h = harness(bridge);
+    h.bridge.updateSession({ shell: "fish" });
+    await h.set("cat 'src/a");
+    await h.press("showAutocomplete");
+    await h.press("insertSelected");
+    expect(await h.echo()).toBe("cat 'src/a\\\\\\'; printf INJECTED; #'");
+    expect(getCommand("cat 'src/a\\\\\\'; printf INJECTED; #'", "fish")?.tokens.at(-1)).toMatchObject({
+      text: `src/${name}`,
+      complete: true,
+    });
+    // Tab's shared prefix inside the quote, then the rest, both in fish's terms.
+    await h.set("cat 'src/it");
+    await h.press("showAutocomplete");
+    await h.press("insertCommonPrefix");
+    expect(await h.echo()).toBe("cat 'src/it\\'s ");
+    await h.press("insertSelected");
+    expect(await h.echo()).toBe("cat 'src/it\\'s a.txt'");
+  });
+
+  it("still replaces a quote that opens right before the name", async () => {
+    const { inserted } = await complete('cat src/"My F', "My File.txt");
+    expect(inserted).toEqual(["\b\b\b\b\bMy\\ File.txt"]);
+  });
+});
+
 describe("common prefix (Tab)", () => {
   it("inserts the shared prefix and keeps the list open", async () => {
     const bridge = monorepoBridge().setDirectory(MONO, ["Projects/", "Programs/", "Prometheus/", "Other/"]);
@@ -218,6 +396,35 @@ describe("common prefix (Tab)", () => {
     await h.echo();
     expect(h.core.getState().visible).toBe(true);
     expect(shown(h.core)).toEqual(["Programs/", "Projects/", "Prometheus/"]);
+  });
+
+  it("escapes every special character of the shared prefix (review H6)", async () => {
+    const bridge = monorepoBridge().setDirectory(MONO, [
+      "Screenshot (1).png",
+      "Screenshot (2).png",
+      "it's a.txt",
+      "it's b.txt",
+      "a$(x)1",
+      "a$(x)2",
+      "{a,b}1",
+      "{a,b}2",
+    ]);
+    const h = harness(bridge);
+    const lines: string[] = [];
+    for (const typed of ["cat S", "cat i", "cat a", "cat {"]) {
+      await h.typeOut(typed, "");
+      await h.press("insertCommonPrefix");
+      lines.push(await h.echo());
+    }
+    expect(bridge.inserts()).toEqual(["creenshot\\ \\(", "t\\'s\\ ", "\\$\\(x\\)", "\b\\{a,b\\}"]);
+    // Each line still parses as the shared prefix, so typing on (or Tab again) completes it.
+    expect(lines.map((line) => getCommand(line)?.tokens.at(-1)?.text)).toEqual([
+      "Screenshot (",
+      "it's ",
+      "a$(x)",
+      "{a,b}",
+    ]);
+    expect(lines.map((line) => getCommand(line)?.tokens.at(-1)?.complete)).toEqual([true, true, true, true]);
   });
 
   it("inserts the item when it is the only one", async () => {

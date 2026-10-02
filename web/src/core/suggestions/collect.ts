@@ -7,12 +7,14 @@ import { type ParseResult, SuggestionFlag } from "../parser/parse";
 import type { Annotation, ParsedArg } from "../parser/state";
 import { repeatLimit, timesPassed } from "../parser/state";
 import type { Option, Subcommand } from "../specs/types";
-import { isObject, makeArray } from "../utils";
+import { hasControlCharacters, isObject, makeArray } from "../utils";
 import type { Item } from "./types";
 
 export interface GeneratorResults {
   generator: Fig.Generator;
   loading: boolean;
+  /** Not started yet: its results, if any, are from an earlier run. */
+  pending?: boolean;
   result: Item[];
 }
 
@@ -29,8 +31,11 @@ const SUGGESTION_TYPES = new Set<string>([
   "auto-execute",
 ]);
 
+/** Names an entry can be typed as: a name with control characters never is (it would be keystrokes). */
 function names(name: unknown): string[] {
-  return makeArray(name as string | string[]).filter((n): n is string => typeof n === "string" && n !== "");
+  return makeArray(name as string | string[]).filter(
+    (n): n is string => typeof n === "string" && n !== "" && !hasControlCharacters(n),
+  );
 }
 
 /** Converts a spec or generator suggestion; null when it has no usable name. */
@@ -39,7 +44,9 @@ export function itemFromSuggestion(
   defaults: { type?: SuggestionType; isDangerous?: boolean; generator?: Fig.Generator },
 ): Item | null {
   if (typeof suggestion === "string") {
-    return suggestion === "" ? null : { type: defaults.type, names: [suggestion], isDangerous: defaults.isDangerous };
+    return names(suggestion).length === 0
+      ? null
+      : { type: defaults.type, names: [suggestion], isDangerous: defaults.isDangerous };
   }
   if (!isObject(suggestion)) {
     return null;
@@ -65,6 +72,93 @@ export function itemFromSuggestion(
     isDangerous: typeof suggestion.isDangerous === "boolean" ? suggestion.isDangerous : defaults.isDangerous,
     generator: defaults.generator,
     templateType: isObject(context) && typeof context.templateType === "string" ? context.templateType : undefined,
+  };
+}
+
+/**
+ * Types a generator may give its entries. Generator output is data (script output, a project's
+ * package.json), so it cannot make an entry run the line (`auto-execute`), delete extra text
+ * (`shortcut`, `history`) or pass for a spec's subcommand or option. `special` is what Figo's own
+ * help template produces; it has no power of its own.
+ */
+const GENERATED_TYPES = new Set<string>(["arg", "file", "folder", "special"]);
+
+/** Generators may draw their own emoji or text, and `fig:` icons, but load nothing from elsewhere. */
+function generatedIcon(icon: string | undefined): string | undefined {
+  if (icon === undefined) {
+    return undefined;
+  }
+  try {
+    return new URL(icon).protocol === "fig:" ? icon : undefined;
+  } catch {
+    return icon;
+  }
+}
+
+/**
+ * What a generator's insert value may not contain, since it is typed as it is (`-- path`,
+ * `name --flag`): anything that ends the command or starts another (`;`, `&`, `|`), redirects
+ * (`<`, `>`), substitutes a command (backticks, `$(…)`, fish's bare `(…)`), expands into one
+ * (any `$`: zsh's `${(e)…}` evaluates its value; `!` pastes a past command, `;` and all, back in)
+ * or runs code from a glob (zsh's `*(e:…:)`). Such a value is ignored: the entry is typed as its
+ * escaped name instead. Control characters are refused the same way.
+ */
+const UNSAFE_INSERT_VALUE = /[;&|<>`$()!]/;
+
+/**
+ * The row of an entry typed as its name: a generator's label may not hide that name. A label that
+ * starts with it (`repo - 1a2b3c`) is kept; any other follows it (`web (Spring Web)`), so the row
+ * still begins with what is typed. A label that merely contains the name could hide it in a word
+ * (`rm` in `harmless form`).
+ */
+function generatedLabel(names: readonly string[], displayName: string | undefined): string | undefined {
+  if (displayName === undefined) {
+    return undefined;
+  }
+  const [only] = names;
+  if (names.length === 1 && only !== undefined && displayName.startsWith(only)) {
+    return displayName;
+  }
+  return `${names.join(", ")} (${displayName})`;
+}
+
+/**
+ * Converts what a generator produced, without the powers only a spec may give an entry: its type
+ * is argument-like, its insert value is plain text (no control characters, nothing that runs or
+ * chains commands, no `{cursor}`, see `insert.ts`), its row shows what accepting it types, and it
+ * is at least as dangerous as the argument it completes.
+ */
+export function itemFromGenerated(
+  suggestion: Fig.Suggestion,
+  defaults: { generator: Fig.Generator; isDangerous: boolean },
+): Item | null {
+  const item = itemFromSuggestion(suggestion, { type: "arg", generator: defaults.generator });
+  if (item === null) {
+    return null;
+  }
+  const type = item.type !== undefined && GENERATED_TYPES.has(item.type) ? item.type : "arg";
+  let { insertValue } = item;
+  if (
+    insertValue !== undefined &&
+    (insertValue === "" || hasControlCharacters(insertValue) || UNSAFE_INSERT_VALUE.test(insertValue))
+  ) {
+    insertValue = undefined;
+  }
+  // Files and folders are always typed as their escaped name; anything else types its insert value.
+  const typesInsertValue = insertValue !== undefined && type !== "file" && type !== "folder";
+  let displayName: string | undefined;
+  if (typesInsertValue) {
+    displayName = item.displayName === undefined && item.names.includes(insertValue ?? "") ? undefined : insertValue;
+  } else {
+    displayName = generatedLabel(item.names, item.displayName);
+  }
+  return {
+    ...item,
+    type,
+    insertValue,
+    displayName,
+    icon: generatedIcon(item.icon),
+    isDangerous: item.isDangerous === true || defaults.isDangerous || undefined,
   };
 }
 
@@ -215,7 +309,7 @@ export function collectSuggestions(result: ParseResult, generators: readonly Gen
     items.push(...argItems(result.currentArg));
     for (const state of generators) {
       // Stale results of path-like generators would be filtered against the wrong directory.
-      if (!state.loading || !state.generator.getQueryTerm) {
+      if ((!state.loading && !state.pending) || !state.generator.getQueryTerm) {
         items.push(...state.result);
       }
     }

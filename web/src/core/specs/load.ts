@@ -1,4 +1,4 @@
-import { isObject, withTimeout } from "../utils";
+import { TimeoutError, isObject, withTimeout } from "../utils";
 import { convertSubcommand } from "./convert";
 import { type ExecuteCommand, type SpecLocation, type Subcommand, serializeLocation } from "./types";
 import { applyVersionDiffs, extractVersion } from "./versions";
@@ -28,6 +28,11 @@ export interface SpecLoaderOptions {
   /** Runs `<cli> --version` (or a spec's `getVersionCommand`) for versioned specs. */
   executeCommand: () => ExecuteCommand;
   disabledCommands: () => readonly string[];
+  /**
+   * A load that timed out has finished after all. Whatever was parsed without the spec (file
+   * completion, cached per command prefix) is out of date.
+   */
+  onLateLoad?: () => void;
 }
 
 const LOAD_TIMEOUT_MS = 5_000;
@@ -65,6 +70,8 @@ export class SpecLoader {
   private readonly specs = new Map<string, Promise<Subcommand>>();
   private readonly failures = new Map<string, number>();
   private readonly cliVersions = new Map<string, string | undefined>();
+  /** Loads that timed out and are still running. */
+  private readonly lateLoads = new Set<string>();
 
   constructor(private readonly options: SpecLoaderOptions) {}
 
@@ -97,7 +104,21 @@ export class SpecLoader {
         }
       }
     }
-    return withTimeout(LOAD_TIMEOUT_MS, pending);
+    const loading = pending;
+    const result = withTimeout(LOAD_TIMEOUT_MS, loading);
+    result.catch((error: unknown) => {
+      if (error instanceof TimeoutError && !this.lateLoads.has(key)) {
+        this.lateLoads.add(key);
+        loading.then(
+          () => {
+            this.lateLoads.delete(key);
+            this.options.onLateLoad?.();
+          },
+          () => this.lateLoads.delete(key),
+        );
+      }
+    });
+    return result;
   }
 
   /** Loads specs ahead of use, one at a time, ignoring failures. */

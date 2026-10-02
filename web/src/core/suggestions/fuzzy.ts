@@ -12,6 +12,13 @@ export interface FuzzyMatch {
   indexes: number[];
 }
 
+/**
+ * Steps the strict pass may take. Its backtracking tries every placement of the query over the
+ * word beginnings, which is exponential on long names with many of them; past this budget the
+ * match counts as one without a strict placement. Real names need a few dozen steps.
+ */
+const MAX_STRICT_STEPS = 2_000;
+
 function isUpper(code: number): boolean {
   return code >= 65 && code <= 90;
 }
@@ -72,8 +79,13 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatch | null {
   const firstSimple = simple[0] ?? 0;
   ti = firstSimple === 0 ? 0 : (next[firstSimple - 1] ?? t.length);
   let qi = 0;
+  let steps = 0;
   if (ti !== t.length) {
     for (;;) {
+      steps += 1;
+      if (steps > MAX_STRICT_STEPS) {
+        break;
+      }
       if (ti >= t.length) {
         // Could not place this character well: move the previous one to its next beginning.
         if (qi <= 0) {

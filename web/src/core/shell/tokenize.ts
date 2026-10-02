@@ -24,6 +24,8 @@ export interface Token {
   complete: boolean;
 }
 
+export type OpenQuote = "'" | '"' | "$'";
+
 export interface Command {
   tokens: Token[];
   /** The last token is the target of a redirection (`cat x > fi`), not an argument. */
@@ -33,6 +35,8 @@ export interface Command {
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
 const REDIRECT = /^(?:&>>|&>|\d*(?:>>|>&|>\||<<<|<<-|<<|<&|<>|>|<))/;
 const TWO_CHAR_OPERATORS = new Set(["&&", "||", "|&", ";;", "&;", ";&"]);
+/** Reserved words a command follows, unquoted (`'then'` is a command name). */
+const KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "time"]);
 
 type LastItem = "none" | "word" | "assignment" | "redirect" | "target";
 
@@ -46,7 +50,11 @@ class Scanner {
   topLevelStatements = 0;
   readonly finished: Command[] = [];
 
-  constructor(private readonly src: string) {}
+  constructor(
+    private readonly src: string,
+    /** fish quotes differently: `\'` and `\\` inside single quotes, no backticks, no `$'…'`. */
+    private readonly fish = false,
+  ) {}
 
   get eof(): boolean {
     return this.pos >= this.src.length;
@@ -121,6 +129,8 @@ class Scanner {
     let lastEnd = statementStart;
     let pendingRedirect = false;
     let target: Token | null = null;
+    /** The last word skipped was `time`, whose `-p` (bash's POSIX format) comes before the command. */
+    let afterTime = false;
 
     for (;;) {
       this.skipBlanks();
@@ -167,10 +177,19 @@ class Scanner {
         last = "target";
         continue;
       }
-      if (tokens.length === 0 && ASSIGNMENT.test(this.src.slice(word.start, word.end))) {
+      const source = this.src.slice(word.start, word.end);
+      if (tokens.length === 0 && ASSIGNMENT.test(source)) {
         last = "assignment";
         continue;
       }
+      const followed = /[ \t]/.test(this.peek());
+      if (tokens.length === 0 && followed && (KEYWORDS.has(source) || (afterTime && source === "-p"))) {
+        // `then git …`, `time -p git …`: the command is what follows (its first word may be an alias).
+        afterTime = source === "time";
+        last = "none";
+        continue;
+      }
+      afterTime = false;
       tokens.push(word);
       last = "word";
     }
@@ -258,6 +277,12 @@ class Scanner {
       if (c === "'") {
         this.pos += 1;
         while (!this.eof && this.peek() !== "'") {
+          // fish reads `\'` and `\\` as escapes even inside single quotes.
+          if (this.fish && this.peek() === "\\" && (this.peek(1) === "'" || this.peek(1) === "\\")) {
+            push(this.peek(1), this.pos);
+            this.pos += 2;
+            continue;
+          }
           push(this.peek(), this.pos);
           this.pos += 1;
         }
@@ -275,7 +300,7 @@ class Scanner {
         }
         continue;
       }
-      if (c === "$" || c === "`") {
+      if (c === "$" || (c === "`" && !this.fish)) {
         if (!this.scanExpansion(false, pushSource)) {
           word.complete = false;
         }
@@ -299,14 +324,15 @@ class Scanner {
         this.pos += 1;
         return true;
       }
-      if (c === "\\" && '$`"\\\n'.includes(this.peek(1)) && this.peek(1) !== "") {
+      // Backticks are plain text to fish, escaped or not.
+      if (c === "\\" && (this.fish ? '$"\\\n' : '$`"\\\n').includes(this.peek(1)) && this.peek(1) !== "") {
         if (this.peek(1) !== "\n") {
           push(this.peek(1), this.pos);
         }
         this.pos += 2;
         continue;
       }
-      if (c === "$" || c === "`") {
+      if (c === "$" || (c === "`" && !this.fish)) {
         if (!this.scanExpansion(true, pushSource)) {
           return false;
         }
@@ -338,7 +364,7 @@ class Scanner {
     } else if (this.peek(1) === "{") {
       this.pos += 2;
       complete = this.skipBalanced("{", "}", 1);
-    } else if (this.peek(1) === "'" && !inString) {
+    } else if (this.peek(1) === "'" && !inString && !this.fish) {
       this.pos += 2;
       complete = false;
       while (!this.eof) {
@@ -396,8 +422,8 @@ function emptyToken(at: number): Token {
  * The simple command that the end of `buffer` is in, or null when there is nothing to complete
  * there (empty input, inside a comment, right after an operator without a space, …).
  */
-export function getCommand(buffer: string): Command | null {
-  const scanner = new Scanner(buffer);
+export function getCommand(buffer: string, shell = ""): Command | null {
+  const scanner = new Scanner(buffer, isFish(shell));
   scanner.parseList(null);
   if (scanner.inComment || scanner.active === null || scanner.active.tokens.length === 0) {
     return null;
@@ -406,8 +432,8 @@ export function getCommand(buffer: string): Command | null {
 }
 
 /** Every simple command in a full command line, e.g. one history entry. */
-export function splitCommands(line: string): Command[] {
-  const scanner = new Scanner(line);
+export function splitCommands(line: string, shell = ""): Command[] {
+  const scanner = new Scanner(line, isFish(shell));
   scanner.parseList(null);
   const commands = [...scanner.finished];
   if (scanner.active !== null && !scanner.inComment) {
@@ -434,6 +460,46 @@ export function wordsOfSimpleCommand(text: string): Token[] | null {
     return null;
   }
   return tokens;
+}
+
+/** `zsh`, `bash`, `fish` or a path to one of them. */
+export function isFish(shell: string): boolean {
+  return shell === "fish" || shell.endsWith("/fish");
+}
+
+/**
+ * The quote open at `to` when the shell reads `buffer` from `from` (the start of a word): `'`, `"`,
+ * `$'`, or null outside quotes. `cat 'src/it'\''s ` has one open at its end, and another after
+ * `'src/`. fish has no `$'…'`, and reads `\'` and `\\` as escapes inside single quotes.
+ */
+export function quoteAt(buffer: string, from: number, to: number, fish = false): OpenQuote | null {
+  let quote: OpenQuote | null = null;
+  for (let i = from; i < to; i += 1) {
+    const c = buffer.charAt(i);
+    if (quote === "'") {
+      if (fish && c === "\\") {
+        i += 1;
+      } else if (c === "'") {
+        quote = null;
+      }
+    } else if (quote !== null) {
+      if (c === "\\") {
+        i += 1;
+      } else if (c === (quote === '"' ? '"' : "'")) {
+        quote = null;
+      }
+    } else if (c === "\\") {
+      i += 1;
+    } else if (c === "'") {
+      quote = "'";
+    } else if (c === '"') {
+      quote = '"';
+    } else if (c === "$" && buffer.charAt(i + 1) === "'" && !fish) {
+      quote = "$'";
+      i += 1;
+    }
+  }
+  return quote;
 }
 
 /**

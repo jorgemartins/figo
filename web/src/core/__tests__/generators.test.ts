@@ -119,6 +119,18 @@ describe("fuzzy matching", () => {
     expect(fuzzyMatch("mr", "Monitor.cpp")?.score).toBe(-6009);
     expect(fuzzyMatch("xyz", "abc")).toBeNull();
   });
+
+  it("bounds its work on names with many word beginnings (review M14)", () => {
+    // Every `a` starts a word and the `b` can never be placed well, so the strict pass would try
+    // every way of placing the `a`s (about 1.7 s here before the bound, doubling with each word).
+    const target = `${"a ".repeat(28)}xb`;
+    const started = performance.now();
+    const match = fuzzyMatch(`${"a".repeat(14)}b`, target);
+    expect(performance.now() - started).toBeLessThan(100);
+    // Still a match, scored as one without a good placement.
+    expect(match?.indexes).toHaveLength(15);
+    expect(match?.score).toBeLessThan(-1000);
+  });
 });
 
 describe("generators through the core", () => {
@@ -302,6 +314,32 @@ describe("specs", () => {
     expect(shown(h.core)).toContain("README.md");
   });
 
+  it("uses a slow spec once it has loaded, instead of the files it fell back to (review L18)", async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => undefined;
+    const slow = new Promise<unknown>((resolve) => {
+      release = () => resolve({ default: { name: "slow", subcommands: [{ name: "start" }, { name: "stop" }] } });
+    });
+    const h = harness(monorepoBridge(), {
+      ...withSpecs({}),
+      importSpec: (name) => (name === "slow" ? slow : new Promise(() => undefined)),
+    });
+    for (const line of ["s", "sl", "slo", "slow", "slow "]) {
+      h.bridge.type(line);
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.runAllTimersAsync();
+    expect(shown(h.core)).toContain("README.md");
+    release();
+    await vi.runAllTimersAsync();
+    // The line is parsed again with the spec, and so is the rest of the word.
+    expect(shown(h.core)).toEqual(["start", "stop"]);
+    h.bridge.type("slow s");
+    await vi.runAllTimersAsync();
+    expect(shown(h.core)).toEqual(["start", "stop"]);
+  });
+
   it("loads diff-versioned specs for the installed version", async () => {
     const bridge = monorepoBridge().onProcess("infracost --version", { stdout: "Infracost v0.9.24" });
     const h = harness(bridge);
@@ -330,6 +368,35 @@ describe("specs", () => {
     const h = harness(bridge);
     await h.typeOut("git co ");
     expect(shown(h.core)[0]).toBe("main");
+  });
+
+  it("keeps parsing the line after a repeated option (review H8)", async () => {
+    const bridge = monorepoBridge().onProcess(/^docker images --format/, {
+      stdout: "ubuntu 1MB latest id1\nalpine 2MB latest id2",
+    });
+    const h = harness(bridge);
+    await h.typeOut("docker run -e A=1 -e B=2 ub");
+    expect(shown(h.core)).toEqual(["ubuntu"]);
+    await h.typeOut("git -c a=b -c c=d ch", "");
+    expect(shown(h.core)).toEqual(expect.arrayContaining(["checkout", "cherry-pick"]));
+    await h.typeOut("curl -H a:b -H c:d --ver", "");
+    expect(shown(h.core)).toEqual(expect.arrayContaining(["-v, --verbose"]));
+    // The second -e is an option again, not the pattern argument (the next one is still the pattern).
+    await h.typeOut("grep -e x -e y ", "");
+    expect(h.core.getState().argument?.name).toBe("search pattern");
+  });
+
+  it("still hides an option that may not be given again", async () => {
+    const spec: Fig.Spec = {
+      name: "rep",
+      options: [{ name: "-e", args: { name: "pattern" } }, { name: "-n" }, { name: "-v", isRepeatable: true }],
+      args: { name: "file" },
+    };
+    const h = harness(monorepoBridge(), withSpecs({ rep: spec }));
+    await h.typeOut("rep -e a -e b -v -");
+    expect(shown(h.core)).toEqual(["-n", "-v"]);
+    await h.typeOut("rep -e a -e b -v x", "rep -e a -e b -v -");
+    expect(h.core.getState().argument?.name).toBe("file");
   });
 
   it("checks the package.json fixture is what the traces assume", () => {

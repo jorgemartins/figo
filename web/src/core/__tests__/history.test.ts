@@ -51,6 +51,16 @@ describe("history mode", () => {
     expect(h.core.getState().historyMode).toBe(false);
   });
 
+  it("never offers a multi-line entry, whose first line would run at once (review M13)", async () => {
+    const h = harness(historyBridge());
+    h.bridge.emit("postExec", { sessionId: "session-1", command: "git status &&\necho done", exitCode: 0 });
+    h.bridge.emit("postExec", { sessionId: "session-1", command: "git stash\u0015list", exitCode: 0 });
+    await h.typeOut("git st");
+    await h.press("toggleHistoryMode");
+    expect(shown(h.core)).toEqual(["status"]);
+    expect(historyItems(["a\nb", "a b", "c\rd"], "").map((item) => item.names[0])).toEqual(["a b"]);
+  });
+
   it("continues inside an open quote", async () => {
     const h = harness(historyBridge());
     // ctrl+r only works while there is a list, like every action; the mode lasts for the line.

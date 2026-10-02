@@ -137,7 +137,7 @@ const LONG: ScenarioSuggestion[] = [
   { type: "file", names: ["a-very-long-file-name-that-keeps-going-and-going-past-the-edge.tar.gz"] },
   { type: "special", names: ["🔥 special item with an emoji icon"], icon: "🔥", description: "Short text and emoji icons are drawn as text" },
   { type: "arg", names: ["docker-compose.override.yml"], icon: "fig://icon?type=docker&color=e67e22&badge=2", description: "A named icon with a corner badge" },
-  { type: "arg", names: ["remote-image-from-https"], icon: "https://example.invalid/icon.png", description: "Remote images that fail show nothing, as upstream" },
+  { type: "arg", names: ["remote-image-from-https"], icon: "https://example.invalid/icon.png", description: "Remote images are never loaded: the type's default icon shows" },
   { type: "history", names: ["git log --oneline --graph --decorate --all"], description: "past command" },
 ];
 

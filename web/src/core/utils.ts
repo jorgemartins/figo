@@ -29,6 +29,16 @@ export function longestCommonPrefix(strings: readonly string[]): string {
   return first.slice(0, length);
 }
 
+/**
+ * C0 controls, DEL and C1 controls. Typed into a terminal they are editing keys (`^U` erases the
+ * line, `\r` runs it), so text from file names, generators or history must never contain them.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
+
+export function hasControlCharacters(text: string): boolean {
+  return CONTROL_CHARACTERS.test(text);
+}
+
 /** Number of user-perceived edit positions: a terminal backspace or arrow moves over a code point, not a UTF-16 unit. */
 export function codePointLength(text: string): number {
   let count = 0;

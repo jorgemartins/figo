@@ -38,7 +38,8 @@ export interface Suggestion {
   /**
    * As written in the spec: a `fig://` URL (`fig://icon?type=npm`, `fig://template?color=…&badge=…`,
    * `fig://path/…`), any other URL, or a short string such as an emoji. Undefined means "use the
-   * default icon for `type`".
+   * default icon for `type`". Only `fig:`, `figo:` and `data:` URLs are drawn; any other URL gets
+   * the default icon. Generators may give only `fig:` URLs and text.
    */
   icon?: string;
   /** Only named arguments of subcommands and options. */

@@ -82,10 +82,31 @@ describe("resolveIcon: fig:// URLs", () => {
 });
 
 describe("resolveIcon: other URLs", () => {
-  it("uses web images as they are, with nothing drawn when they fail", () => {
-    expect(resolveIcon(item("arg", "https://example.com/icon.png"))).toEqual({
+  it("never loads an image from the network or the disk: the type's default icon is drawn (review M11)", () => {
+    for (const url of [
+      "https://example.com/icon.png",
+      "http://example.com/icon.png",
+      "file:///Users/me/icon.png",
+      "blob:https://example.com/0000",
+    ]) {
+      expect(resolveIcon(item("subcommand", url))).toEqual({ kind: "asset", name: "command" });
+      expect(resolveIcon(item("folder", url, "Sites/"), { iconDirectory: "/Users/me/" })).toEqual({
+        kind: "image",
+        url: "fig://path/Users/me/Sites/",
+        fallback: { kind: "asset", name: "finder-folder" },
+      });
+    }
+  });
+
+  it("uses the app's own images and data URLs as they are", () => {
+    expect(resolveIcon(item("arg", "figo://app/icon.png"))).toEqual({
       kind: "image",
-      url: "https://example.com/icon.png",
+      url: "figo://app/icon.png",
+      fallback: null,
+    });
+    expect(resolveIcon(item("arg", "data:image/png;base64,AAAA"))).toEqual({
+      kind: "image",
+      url: "data:image/png;base64,AAAA",
       fallback: null,
     });
   });

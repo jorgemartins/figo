@@ -4,7 +4,7 @@
 import { queryTermFor } from "../suggestions/queryTerm";
 import type { Item } from "../suggestions/types";
 import { ensureTrailingSlash, longestCommonPrefix } from "../utils";
-import { type InsertionContext, insertionText } from "./insert";
+import { type InsertionContext, escapedName, insertionText } from "./insert";
 
 export type PrefixOutcome = { kind: "full" } | { kind: "partial"; text: string } | { kind: "none"; reason: string };
 
@@ -80,13 +80,13 @@ export function commonPrefixOutcome(
   if (!shared || shared === query) {
     return { kind: "none", reason: "No remaining prefix to insert" };
   }
-  const text = shared.replace(/\s/g, "\\ ");
-  if (text === insertionText(selected, context)) {
+  if (escapedName(selected, shared, context, true) === insertionText(selected, context)) {
     return selected.type === "auto-execute"
       ? { kind: "none", reason: "Cannot execute through a prefix" }
       : { kind: "full" };
   }
-  return { kind: "partial", text };
+  // Escaped so that it stays correct whatever is typed after it (`Screenshot\ \(`).
+  return { kind: "partial", text: escapedName(selected, shared, context, false) };
 }
 
 /**

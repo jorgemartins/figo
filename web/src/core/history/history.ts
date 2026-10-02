@@ -3,6 +3,7 @@
  * during this run. Used by history mode (ctrl+r) and the `history` template.
  */
 import type { Item } from "../suggestions/types";
+import { hasControlCharacters } from "../utils";
 
 export type RunCommand = (executable: string, args: string[]) => Promise<string>;
 
@@ -114,7 +115,8 @@ export function historyItems(entries: readonly string[], prefix: string): Item[]
       continue;
     }
     const rest = entry.slice(prefix.length).replace(/\s+$/, "");
-    if (rest === "") {
+    // A multi-line entry cannot be typed: its first newline would run the line there and then.
+    if (rest === "" || hasControlCharacters(rest)) {
       continue;
     }
     remainders.push(rest);

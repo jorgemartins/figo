@@ -11,12 +11,12 @@ export interface LineRead {
  * The command the cursor is at the end of, with aliases expanded; null when there is nothing to
  * complete: the cursor inside a word, a blank line, a comment, right after an operator, …
  */
-export function readLine(buffer: string, cursor: number, aliases: AliasMap): LineRead | null {
+export function readLine(buffer: string, cursor: number, aliases: AliasMap, shell = ""): LineRead | null {
   if (buffer.charAt(cursor).trim() !== "") {
     return null;
   }
   const text = buffer.slice(0, cursor);
-  const found = text.trim() === "" ? null : getCommand(text);
+  const found = text.trim() === "" ? null : getCommand(text, shell);
   if (found === null) {
     return null;
   }

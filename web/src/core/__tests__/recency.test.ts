@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { rankItems, sortByRank } from "../suggestions/rank";
-import { RecencyIndex, memoryStorage } from "../suggestions/recency";
+import { MAX_RECENCY_COMMANDS, MAX_RECENCY_NAMES, RecencyIndex, memoryStorage } from "../suggestions/recency";
 import type { Item } from "../suggestions/types";
 import { harness, monorepoBridge, select, shown } from "./fixtures";
 
@@ -26,6 +26,32 @@ describe("ranking", () => {
     recency.record("ls", "../");
     const ranked = rankItems([item("zero", 0), item("huge", 500), item("../")], "ls", recency);
     expect(ranked.map((entry) => entry.rank)).toEqual([50, 100, 50]);
+  });
+
+  it("keeps the index bounded, dropping the least recently used (review L20)", () => {
+    const storage = memoryStorage();
+    const recency = new RecencyIndex(storage);
+    let at = 1_000_000;
+    for (let i = 0; i < MAX_RECENCY_NAMES + 10; i += 1) {
+      recency.record("first", `name${i}`, (at += 1));
+    }
+    for (let i = 0; i < MAX_RECENCY_COMMANDS + 10; i += 1) {
+      recency.record(`cmd${i}`, "name", (at += 1));
+    }
+    const stored = JSON.parse(storage.getItem("figo.recency") ?? "{}") as Record<string, Record<string, number>>;
+    expect(Object.keys(stored)).toHaveLength(MAX_RECENCY_COMMANDS);
+    // The commands used longest ago are gone; the latest picks survive.
+    expect(stored.first).toBeUndefined();
+    expect(recency.lastUsed("cmd0", "name")).toBeUndefined();
+    expect(recency.lastUsed(`cmd${MAX_RECENCY_COMMANDS + 9}`, "name")).toBe(at);
+    // Within a command, only the most recent names are kept.
+    const names = new RecencyIndex(memoryStorage());
+    for (let i = 0; i < MAX_RECENCY_NAMES + 10; i += 1) {
+      names.record("git", `name${i}`, 1_000 + i);
+    }
+    expect(names.lastUsed("git", "name0")).toBeUndefined();
+    expect(names.lastUsed("git", `name${MAX_RECENCY_NAMES + 9}`)).toBe(1_000 + MAX_RECENCY_NAMES + 9);
+    expect(names.lastUsed("git", "name10")).toBe(1_010);
   });
 
   it("ignores ↪ entries", () => {

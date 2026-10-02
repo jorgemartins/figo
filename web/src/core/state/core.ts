@@ -13,7 +13,7 @@ import { type InsertionContext, fullInsertionText, insertionBytes } from "../ins
 import { type ParseContext, ParseCache, type ParseResult, parseArguments, redirectTargetResult } from "../parser/parse";
 import { SETTING, booleanSetting, numberSetting, stringListSetting } from "../settings";
 import { type AliasMap, parseAliases } from "../shell/aliases";
-import type { Token } from "../shell/tokenize";
+import { type Token, splitCommands } from "../shell/tokenize";
 import { originOf } from "../specs/convert";
 import { firstTokenSpec } from "../specs/firstToken";
 import { COMMON_SPECS, type SpecIndex, SpecLoader } from "../specs/load";
@@ -66,6 +66,17 @@ const ACTIONS = new Set<string>([
   "decreaseSize",
 ]);
 
+/** Actions on the list itself: nothing to act on while the loading indicator is shown instead. */
+const LIST_ACTIONS = new Set<ActionId>([
+  "insertSelected",
+  "insertSelectedAndExecute",
+  "insertCommonPrefix",
+  "insertCommonPrefixOrNavigateDown",
+  "insertCommonPrefixOrInsertSelected",
+  "navigateUp",
+  "navigateDown",
+]);
+
 function defaultImportSpec(name: string): Promise<unknown> {
   return import(/* @vite-ignore */ `figo://specs/${name}.js`);
 }
@@ -103,11 +114,18 @@ export class CompletionCore implements Core {
   private pendingEdit: PendingEdit | null = null;
 
   private visibility: Visibility = "hiddenUntilKeypress";
+  /**
+   * A show key started the argument's generators: show the popup once they finish (`tab`: the
+   * onlyShowOnTab Tab, which completes a single entry instead).
+   */
+  private revealWhenLoaded: "show" | "tab" | null = null;
   private lastInserted: Item | null = null;
   private justInserted = false;
 
   private items: RankedItem[] = [];
   private listContext: ListContext | null = null;
+  /** The list was built for a buffer holding more than one command (see `isCompoundLine`). */
+  private compoundLine = false;
   private selectedIndex = 0;
   private hasChangedIndex = false;
 
@@ -134,13 +152,16 @@ export class CompletionCore implements Core {
       loadIndex: options.loadIndex ?? defaultLoadIndex,
       executeCommand: () => this.executeCommand(undefined),
       disabledCommands: () => stringListSetting(this.settings, SETTING.disableForCommands),
+      onLateLoad: () => this.onLateSpec(),
     });
     this.generators = new GeneratorRuns(
       () => this.services(),
       () => {
         this.updateLoading();
         this.recompute();
+        this.revealIfLoaded();
       },
+      () => this.generatorsMayRun(),
     );
     this.history = new SessionHistory({
       bridge,
@@ -153,7 +174,7 @@ export class CompletionCore implements Core {
     this.state = this.buildState();
     this.listen("session", (context) => this.onSession(context));
     this.listen("editBuffer", (event) => this.onEditBuffer(event));
-    this.listen("preExec", (event) => this.onSessionEvent(event.sessionId, () => this.reset()));
+    this.listen("preExec", (event) => this.onSessionEvent(event.sessionId, () => this.clearLine()));
     this.listen("postExec", (event) => this.onPostExec(event));
     this.listen("keybinding", (event) => this.onKeybinding(event));
     this.listen("settings", (event) => this.applySettings(event.settings));
@@ -190,21 +211,29 @@ export class CompletionCore implements Core {
       return;
     }
     const selected = this.items[this.selectedIndex];
-    if (
-      action === "showAutocomplete" &&
-      booleanSetting(this.settings, SETTING.onlyShowOnTab) &&
-      this.visibility !== "visible"
-    ) {
-      // With onlyShowOnTab, Tab reveals the list, or completes straight away when there is one entry.
-      if (this.items.length === 1 && selected) {
-        this.insertItem(selected, false);
-      } else if (this.items.length > 0) {
-        this.setVisibility("visible");
-      }
+    const onlyShowOnTab = booleanSetting(this.settings, SETTING.onlyShowOnTab);
+    const shows = action === "showAutocomplete" || action === "toggleAutocomplete";
+    if (action === "hideAutocomplete") {
+      this.revealWhenLoaded = null;
+    }
+    if (shows && this.revealWhenLoaded !== null) {
+      return; // already on its way
+    }
+    if (shows && this.visibility !== "visible" && this.generators.start()) {
+      // The argument's generators waited for the popup; it appears once they are done, rather
+      // than showing a partial list first.
+      this.revealWhenLoaded = onlyShowOnTab && action === "showAutocomplete" ? "tab" : "show";
+      this.updateLoading();
+      this.publish();
       return;
     }
-    // Upstream ignores every key while the list is empty.
-    if (!selected) {
+    if (action === "showAutocomplete" && onlyShowOnTab && this.visibility !== "visible") {
+      this.revealForTab();
+      return;
+    }
+    // Upstream ignores every key while the list is empty. Keys stop being taken while the loading
+    // indicator hides the list; one already on its way must not act on the hidden list either.
+    if (!selected || (this.state.loading && this.state.visible && LIST_ACTIONS.has(action))) {
       return;
     }
     switch (action) {
@@ -216,8 +245,7 @@ export class CompletionCore implements Core {
         break;
       case "insertCommonPrefix":
         if (!this.insertCommonPrefix()) {
-          this.shakeCount += 1;
-          this.publish();
+          this.shake();
         }
         break;
       case "insertCommonPrefixOrNavigateDown":
@@ -343,7 +371,7 @@ export class CompletionCore implements Core {
       this.reset();
     }
     if (event.buffer === null) {
-      this.reset();
+      this.clearLine();
       return;
     }
     this.buffer = event.buffer;
@@ -355,6 +383,18 @@ export class CompletionCore implements Core {
     this.history.add(event.command);
     // The command may have changed what generated specs describe (a new branch, a new dependency).
     this.parseCache.clearGenerated();
+  }
+
+  /** A spec that took too long has loaded: forget what was parsed without it, and parse again. */
+  private onLateSpec(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.parseCache.clear();
+    if (this.line !== null) {
+      this.lineKey = "";
+      this.refresh(true);
+    }
   }
 
   private onKeybinding(event: NativeEvents["keybinding"]): void {
@@ -427,7 +467,7 @@ export class CompletionCore implements Core {
   private refresh(contextOnly = false): void {
     const line = booleanSetting(this.settings, SETTING.disable)
       ? null
-      : readLine(this.buffer, this.cursor, this.aliases());
+      : readLine(this.buffer, this.cursor, this.aliases(), this.shellContext?.shell ?? "");
     if (line === null) {
       this.reset();
       return;
@@ -440,6 +480,9 @@ export class CompletionCore implements Core {
       // Same command, so the list still applies; keep its buffer current for insertion.
       if (this.listContext !== null) {
         this.listContext = { ...this.listContext, buffer: this.buffer, token: line.command.tokens.at(-1) ?? null };
+      }
+      if (this.isCompoundLine() !== this.compoundLine) {
+        this.recompute(); // text elsewhere on the line decides whether a row may run it
       }
       return;
     }
@@ -498,6 +541,11 @@ export class CompletionCore implements Core {
       originOf(result.node) !== originOf(previous.node);
     const replaced = this.generators.update(result, previous, this.generatorContext(result));
     if (!edit.contextOnly) {
+      if (this.revealWhenLoaded !== null) {
+        // Typing on after a show key whose list was still loading: the popup counts as shown.
+        this.visibility = "visible";
+        this.revealWhenLoaded = null;
+      }
       this.visibility = visibilityAfterParse(this.visibility, {
         hasNewArg,
         insertionRetriggered: this.generators.replaced(replaced, this.lastInserted?.generator),
@@ -513,8 +561,48 @@ export class CompletionCore implements Core {
     }
     this.parse = result;
     this.fuzzy = this.fuzzyFor(result);
+    this.syncGenerators();
     this.updateLoading();
     this.recompute();
+    this.revealIfLoaded();
+  }
+
+  /**
+   * Generators run programs in the user's directory (`make -qp` evaluates the Makefile), so they
+   * only run for a popup that is to be shown: not while it is dismissed with Esc, hidden after a
+   * paste or an insertion, or waiting for Tab with onlyShowOnTab. They start when it is shown.
+   */
+  private generatorsMayRun(): boolean {
+    return !this.disposed && (this.visibility === "visible" || this.revealWhenLoaded !== null);
+  }
+
+  /** Starts the argument's generators while they may run; otherwise holds back unfinished ones. True if anything changed. */
+  private syncGenerators(): boolean {
+    return this.generatorsMayRun() ? this.generators.start() : this.generators.pause();
+  }
+
+  /** onlyShowOnTab: Tab reveals the list, or completes straight away when there is one entry. */
+  private revealForTab(): void {
+    const selected = this.items[this.selectedIndex];
+    if (this.items.length === 1 && selected) {
+      this.insertItem(selected, false);
+    } else if (this.items.length > 0) {
+      this.setVisibility("visible");
+    }
+  }
+
+  /** Shows the popup a show key asked for, once the generators it started have finished. */
+  private revealIfLoaded(): void {
+    const reveal = this.revealWhenLoaded;
+    if (reveal === null || this.generators.loading || this.parsePending) {
+      return;
+    }
+    this.revealWhenLoaded = null;
+    if (reveal === "tab") {
+      this.revealForTab();
+    } else if (this.items.length > 0) {
+      this.setVisibility("visible");
+    }
   }
 
   // ---- Generators and history ---------------------------------------------------------------
@@ -552,6 +640,15 @@ export class CompletionCore implements Core {
     this.recompute();
   }
 
+  /**
+   * Whether the whole buffer, text after the cursor included, is more than one simple command.
+   * A newline runs all of it, and only the command being completed has been checked for danger,
+   * so no row may run such a line (unless the user allows dangerous commands to run at once).
+   */
+  private isCompoundLine(): boolean {
+    return splitCommands(this.buffer, this.shellContext?.shell ?? "").length > 1;
+  }
+
   /** History entries continuing the line; the first use reads the shell's history, then refreshes. */
   private historyCandidates(): Item[] {
     const version = this.history.version;
@@ -579,12 +676,14 @@ export class CompletionCore implements Core {
     }
     let list: RankedItem[];
     try {
+      this.compoundLine = this.isCompoundLine();
       list = buildList(result, this.generators.current, {
         settings: this.settings,
         recency: this.recency,
         fuzzy: this.fuzzy,
         historyMode: this.historyMode,
         history: () => this.historyCandidates(),
+        compoundLine: this.compoundLine,
       });
     } catch (error) {
       // Spec data is arbitrary; a malformed suggestion must not wedge the popup.
@@ -643,6 +742,11 @@ export class CompletionCore implements Core {
         this.loadingTimer = null;
         if (!this.isIdle() && !this.disposed) {
           this.loading = true;
+          if (this.revealWhenLoaded !== null) {
+            // A show key is waiting on slow generators: show the indicator meanwhile. What the key
+            // does once they finish stands (onlyShowOnTab's Tab still completes a single entry).
+            this.visibility = "visible";
+          }
           this.recompute();
         }
       }, LOADING_DELAY_MS);
@@ -666,6 +770,11 @@ export class CompletionCore implements Core {
 
   private setVisibility(visibility: Visibility): void {
     this.visibility = visibility;
+    if (this.syncGenerators()) {
+      this.updateLoading();
+      this.recompute();
+      return;
+    }
     this.publish();
   }
 
@@ -701,6 +810,7 @@ export class CompletionCore implements Core {
       token: list.token,
       fuzzy: list.fuzzy,
       preferVerbose: booleanSetting(this.settings, SETTING.preferVerboseSuggestions),
+      shell: this.shellContext?.shell ?? "",
       insertSpace: booleanSetting(this.settings, SETTING.insertSpaceAutomatically, true),
     };
   }
@@ -713,21 +823,31 @@ export class CompletionCore implements Core {
     }
   }
 
+  /** Nothing to insert, or an insertion that was refused: the UI shakes the list. */
+  private shake(): void {
+    this.shakeCount += 1;
+    this.publish();
+  }
+
   private insertItem(item: RankedItem, execute: boolean): void {
     const context = this.insertionContext();
     const list = this.listContext;
     if (context === null || list === null) {
       return;
     }
-    this.send(insertionBytes(item, fullInsertionText(item, context, execute), context, true), list.buffer);
+    const bytes = insertionBytes(item, fullInsertionText(item, context, execute), context, true);
+    if (bytes === null) {
+      this.shake();
+      return;
+    }
+    this.send(bytes, list.buffer);
     const name = item.names[0];
     if (name !== undefined) {
       this.recency.record(list.result.tokens[list.result.commandIndex] ?? "", name);
     }
-    this.visibility = "hiddenByInsertion";
     this.lastInserted = item;
     this.justInserted = true;
-    this.publish();
+    this.setVisibility("hiddenByInsertion");
   }
 
   /** Tab: inserts the shared prefix (or the item); false when there is nothing to insert. */
@@ -746,10 +866,24 @@ export class CompletionCore implements Core {
       this.insertItem(selected, false);
       return true;
     }
-    this.send(insertionBytes(selected, outcome.text, context, false), list.buffer);
+    const bytes = insertionBytes(selected, outcome.text, context, false);
+    if (bytes === null) {
+      return false;
+    }
+    this.send(bytes, list.buffer);
     // A partial insertion keeps the list up, and must not look like a paste on the next parse.
     this.justInserted = true;
     return true;
+  }
+
+  /**
+   * The line is gone (it ran, or there is no line to edit): forget it too, so a later `session`
+   * or `settings` event cannot parse it again or offer it at the next prompt.
+   */
+  private clearLine(): void {
+    this.buffer = "";
+    this.cursor = 0;
+    this.reset();
   }
 
   /** Back to the initial state for a new line: hidden until the next keystroke. */
@@ -762,6 +896,7 @@ export class CompletionCore implements Core {
     this.parse = null;
     this.generators.clear();
     this.visibility = "hiddenUntilKeypress";
+    this.revealWhenLoaded = null;
     this.lastInserted = null;
     this.justInserted = false;
     this.items = [];
@@ -815,7 +950,12 @@ export class CompletionCore implements Core {
     if (this.sessionId === null) {
       return;
     }
-    const params = interceptFor(this.sessionId, this.state, this.visibility);
+    const params = interceptFor(
+      this.sessionId,
+      this.state,
+      this.visibility,
+      this.generators.pending || this.revealWhenLoaded !== null,
+    );
     const key = JSON.stringify(params);
     if (key !== this.lastIntercept) {
       this.lastIntercept = key;

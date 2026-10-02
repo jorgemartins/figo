@@ -44,8 +44,22 @@ function devThemes(directory: string | undefined): Plugin {
   };
 }
 
+/**
+ * Dev server only: lets the page's Content-Security-Policy (index.html) reach Vite's hot-reload
+ * WebSocket, which not every browser counts as 'self'. The built page keeps the policy as written.
+ */
+function devContentSecurityPolicy(): Plugin {
+  return {
+    name: "figo-dev-csp",
+    apply: "serve",
+    transformIndexHtml(html) {
+      return html.replace(/connect-src ([^;"]*)/, "connect-src $1 ws: wss:");
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), devThemes(process.env.FIGO_THEMES_DIR)],
+  plugins: [react(), devThemes(process.env.FIGO_THEMES_DIR), devContentSecurityPolicy()],
   // The app serves these files from its bundle under a custom scheme, so asset URLs must be relative.
   base: "./",
   build: {

@@ -23,11 +23,12 @@ function normalize(items: unknown, isDangerous: boolean): GeneratedSuggestion[] 
   if (!Array.isArray(items)) {
     return [];
   }
+  // A plain string is a value like any other, escaped when inserted (upstream inserted it as is).
   return items
     .filter(hasName)
     .map((item: unknown) =>
       typeof item === "string"
-        ? { type: "arg", name: item, insertValue: item, isDangerous }
+        ? { type: "arg", name: item, isDangerous }
         : { ...(item as GeneratedSuggestion), type: (item as GeneratedSuggestion).type ?? "arg" },
     );
 }

@@ -1,5 +1,6 @@
 import type { NativeBridge, SessionId } from "../../bridge/contract";
 import { directoryOfPath } from "../shell/expand";
+import { hasControlCharacters } from "../utils";
 
 /**
  * The `filepaths` / `folders` templates. A fresh generator object is made for every argument that
@@ -50,7 +51,7 @@ export function pathsGenerator(options: PathsGeneratorOptions): Fig.Generator {
       const suggestions: Fig.TemplateSuggestion[] = [];
       for (const name of sortDirectoryNames(stdout.split("\n"))) {
         const isFolder = name.endsWith("/");
-        if (options.foldersOnly && !isFolder) {
+        if ((options.foldersOnly && !isFolder) || hasControlCharacters(name)) {
           continue;
         }
         suggestions.push({
@@ -71,8 +72,14 @@ export function pathsGenerator(options: PathsGeneratorOptions): Fig.Generator {
  * `cd`) run, using the bridge's directory listing instead of a subprocess: folders get a trailing
  * slash, symlinks are described by their target. Rejects when the directory cannot be read, so a
  * mistyped path lists nothing rather than some other directory.
+ *
+ * Names with control characters are left out: they could not be typed safely, and a newline in a
+ * name would otherwise split it into entries of its own choosing.
  */
 export async function listLikeLs(bridge: NativeBridge, sessionId: SessionId, path: string): Promise<string> {
   const { entries } = await bridge.call("fs.list", { sessionId, path });
-  return entries.map((entry) => (entry.kind === "directory" ? `${entry.name}/` : entry.name)).join("\n");
+  return entries
+    .filter((entry) => typeof entry.name === "string" && !hasControlCharacters(entry.name))
+    .map((entry) => (entry.kind === "directory" ? `${entry.name}/` : entry.name))
+    .join("\n");
 }

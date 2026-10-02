@@ -61,18 +61,29 @@ export function coreStateOf(input: OutputInput): CoreState {
 
 export type InterceptParams = NativeRequests["shell.setIntercept"]["params"];
 
-/** Which keys the session's wrapper should take (UI doc §3.3). */
-export function interceptFor(sessionId: SessionId, state: CoreState, visibility: Visibility): InterceptParams {
+/**
+ * Which keys the session's wrapper should take (UI doc §3.3). `generatorsWaiting`: generators of
+ * the current argument wait for the popup to be shown, or a show key waits for them to finish, so
+ * a show key has something to show even while the list is still empty.
+ */
+export function interceptFor(
+  sessionId: SessionId,
+  state: CoreState,
+  visibility: Visibility,
+  generatorsWaiting = false,
+): InterceptParams {
   const count = state.suggestions.length;
   const bindings = effectiveBindings(state.settings);
-  if (booleanSetting(state.settings, SETTING.onlyShowOnTab) && visibility !== "visible") {
+  // Tab shows the list, and keeps meaning that while the list it asked for is loading.
+  if (booleanSetting(state.settings, SETTING.onlyShowOnTab) && (visibility !== "visible" || generatorsWaiting)) {
     bindings.tab = "showAutocomplete";
   }
   return {
     sessionId,
-    interceptBound: state.visible && count > 0,
+    // The loading indicator hides the list, so keys must not act on it.
+    interceptBound: state.visible && !state.loading && count > 0,
     // Nothing is taken right after an insertion, until the shell has echoed it.
-    interceptGlobal: count > 0 && visibility !== "hiddenByInsertion",
+    interceptGlobal: (count > 0 || generatorsWaiting) && visibility !== "hiddenByInsertion",
     bindings,
   };
 }

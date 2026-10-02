@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { expandAliases, parseAliases, unquote } from "./aliases";
-import { getCommand, sourceStartOf, splitCommands, wordsOfSimpleCommand } from "./tokenize";
+import { getCommand, quoteAt, sourceStartOf, splitCommands, wordsOfSimpleCommand } from "./tokenize";
 
 function words(buffer: string): string[] | null {
   return getCommand(buffer)?.tokens.map((token) => token.text) ?? null;
@@ -36,6 +36,18 @@ describe("getCommand", () => {
     ["echo one\ngit ", ["git", ""]],
     ["! git st", ["git", "st"]],
     ["echo ${HOME} ", ["echo", "${HOME}", ""]],
+    // Reserved words before a command are not the command (review L19).
+    ["if true; then git ch", ["git", "ch"]],
+    ["while true; do ls ", ["ls", ""]],
+    ["if git st", ["git", "st"]],
+    ["time FOO=1 git st", ["git", "st"]],
+    // bash's `time -p` (review 2, item 8); a dash anywhere else is still an argument.
+    ["time -p git st", ["git", "st"]],
+    ["time -p", ["-p"]],
+    ["if -p x", ["-p", "x"]],
+    ["if true; then", ["then"]],
+    ["echo then ", ["echo", "then", ""]],
+    ["'then' x", ["then", "x"]],
   ])("%j → %j", (buffer, expected) => {
     expect(words(buffer)).toEqual(expected);
   });
@@ -79,6 +91,23 @@ describe("sourceStartOf", () => {
     const buffer = "cd My\\ Do";
     const token = getCommand(buffer)?.tokens[1];
     expect(token && buffer.slice(sourceStartOf(token, 0, buffer))).toBe("My\\ Do");
+  });
+});
+
+describe("quoteAt", () => {
+  it.each<[string, number, string | null]>([
+    ['"src/My F', 5, '"'],
+    ['"src/My F', 0, null],
+    ["'src/it'\\''s ", 5, "'"],
+    ["'src/it'\\''s ", 13, "'"],
+    ["'src/it'\\''s ", 9, null],
+    ['"a\\"b', 5, '"'],
+    ['"a"b', 4, null],
+    ["a\\'b", 4, null],
+    ["$'a\\'b", 6, "$'"],
+    ["\"it's", 5, '"'],
+  ])("%j at %i → %j", (buffer, to, expected) => {
+    expect(quoteAt(buffer, 0, to)).toBe(expected);
   });
 });
 
@@ -132,6 +161,7 @@ describe("aliases", () => {
     expect(expand("g ")).toEqual(["git", ""]);
     expect(expand("gco ma")).toEqual(["git", "checkout", "ma"]);
     expect(expand("bad x")).toEqual(["bad", "x"]);
+    expect(expand("if true; then g ch")).toEqual(["git", "ch"]);
   });
 
   it("only substitutes single simple commands", () => {

@@ -16,6 +16,16 @@ export interface FilterOptions {
   executeAfterSpace: boolean;
   /** `autocomplete.immediatelyRunDangerousCommands`. */
   runDangerous: boolean;
+  /**
+   * The line already has a dangerous option or argument (`rm -rf`): no entry may run it, as no
+   * dangerous entry may (specs mark `rm`'s `-r` and `-f` dangerous, not its file arguments).
+   */
+  dangerousLine?: boolean;
+}
+
+/** Whether an entry that runs the line may be offered next to `items`. */
+function mayRun(items: readonly Item[], options: FilterOptions): boolean {
+  return options.runDangerous || (!options.dangerousLine && !items.some((item) => item.isDangerous));
 }
 
 const NO_MATCH: MatchInfo = { nameIndex: 0, ranges: [] };
@@ -118,7 +128,7 @@ function special(name: string, description: string, originalType?: Item["origina
 export function filterItems(items: readonly Item[], searchTerm: string, options: FilterOptions): RankedItem[] {
   if (searchTerm === "") {
     const visible: RankedItem[] = items.filter((item) => !item.hidden).map((item) => ({ ...item, match: NO_MATCH }));
-    if (options.executeAfterSpace && visible.length > 0 && !options.hideAutoExecute) {
+    if (options.executeAfterSpace && visible.length > 0 && !options.hideAutoExecute && mayRun(visible, options)) {
       visible.unshift(special("↪", "Immediately execute"));
     }
     return visible;
@@ -140,7 +150,7 @@ export function filterItems(items: readonly Item[], searchTerm: string, options:
       const firstArg = item.args?.[0];
       const canExecute =
         (!firstName || !item.insertValue || firstName === item.insertValue) &&
-        (!item.isDangerous || options.runDangerous) &&
+        mayRun([item], options) &&
         (!firstArg || Boolean(firstArg.isOptional));
       if (canExecute && !options.hideAutoExecute && !twinAdded) {
         added.unshift(autoExecuteTwin(item, exactName));
@@ -167,7 +177,7 @@ export function filterItems(items: readonly Item[], searchTerm: string, options:
   partial.sort((a, b) => (a.score !== b.score ? b.score - a.score : (b.item.rank ?? 0) - (a.item.rank ?? 0)));
   let result: RankedItem[] = [...exact, ...exactFolders, ...partial.map((entry) => entry.item)];
 
-  if (result.length > 0 && !twinAdded && !options.hideAutoExecute) {
+  if (result.length > 0 && !twinAdded && !options.hideAutoExecute && mayRun(result, options)) {
     if (searchTerm === "." || (searchTerm.endsWith("/") && result.some((item) => item.templateType === "folders"))) {
       result = [special(searchTerm === "." ? "." : "↪", "Enter the current directory", "folder"), ...result];
     } else if (options.suggestCurrentToken) {

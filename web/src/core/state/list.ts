@@ -15,6 +15,29 @@ export interface ListOptions {
   historyMode: boolean;
   /** History entries continuing the line, for history mode and `beta.history.mode`. */
   history: () => Item[];
+  /**
+   * The buffer holds more than the command being completed (`a && b`, `$(…)`, text after the
+   * cursor): running it from the list would run all of it, unchecked.
+   */
+  compoundLine?: boolean;
+}
+
+/**
+ * Whether running the line now could run something dangerous: the argument being completed, an
+ * option given, or an argument already given is marked dangerous (`rm -rf`, `wipe target …`).
+ */
+function isDangerousLine(result: ParseResult): boolean {
+  const given = result.annotations.flatMap((annotation) =>
+    annotation.type === "composite" ? annotation.subtokens : [annotation],
+  );
+  return (
+    Boolean(result.currentArg?.isDangerous) ||
+    result.passedOptions.some((option) => option.isDangerous === true) ||
+    given.some(
+      (annotation) =>
+        (annotation.type === "subcommand_arg" || annotation.type === "option_arg") && annotation.arg?.isDangerous === true,
+    )
+  );
 }
 
 function candidates(result: ParseResult, runs: readonly GeneratorResults[], options: ListOptions): Item[] {
@@ -45,6 +68,7 @@ export function buildList(result: ParseResult, runs: readonly GeneratorResults[]
         booleanSetting(settings, SETTING.hideAutoExecuteSuggestion) || booleanSetting(settings, SETTING.onlyShowOnTab),
       executeAfterSpace: booleanSetting(settings, SETTING.immediatelyExecuteAfterSpace),
       runDangerous: booleanSetting(settings, SETTING.immediatelyRunDangerousCommands),
+      dangerousLine: Boolean(options.compoundLine) || isDangerousLine(result),
     }),
   );
 }

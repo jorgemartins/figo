@@ -149,8 +149,9 @@ export function timesPassed(option: Option, passed: readonly Option[]): number {
 }
 
 /**
- * How often an option may be given. Unset means once, for the parser and the suggestion list
- * alike (upstream let the parser accept unlimited repeats while hiding the option after one).
+ * How often the suggestion list offers an option; unset means once. The parser accepts any number
+ * of repeats, as upstream: specs often leave `isRepeatable` out (`docker run -e`, `curl -H`), and
+ * refusing the second one threw the rest of the line off.
  */
 export function repeatLimit(option: Option): number {
   const { isRepeatable } = option;
@@ -194,9 +195,6 @@ function forSubcommand(state: ParserState, token: string, isFinal: boolean): Par
 
 function forOption(state: ParserState, token: string, isFinal: boolean): ParserState {
   const option = findOption(state, token);
-  if (timesPassed(option, state.passedOptions) >= repeatLimit(option)) {
-    throw new UpdateStateError(`${token} cannot be passed again`);
-  }
   const annotations = withAnnotation(state, { type: "option", text: token });
   if (isFinal) {
     return { ...state, annotations };
@@ -243,13 +241,19 @@ function forOptionToken(state: ParserState, token: string, isFinal: boolean): Pa
   if (isFinal && (token === "-" || token === "--")) {
     throw new UpdateStateError("Not consuming a lone dash as an option");
   }
+  if (token === "-") {
+    // An argument (standard input, the previous directory), unless the spec has a `-` option.
+    return forOption(state, token, isFinal);
+  }
   if (token === "--") {
-    return {
-      ...state,
-      endOfOptions: true,
-      annotations: withAnnotation(state, { type: "option", text: token }),
-      optionArgs: EMPTY_ARGS,
-    };
+    let ended: ParserState;
+    try {
+      // A spec's own `--` takes what follows as its argument (`npm run build -- …`).
+      ended = forOption(state, token, isFinal);
+    } catch {
+      ended = { ...state, annotations: withAnnotation(state, { type: "option", text: token }), optionArgs: EMPTY_ARGS };
+    }
+    return { ...ended, endOfOptions: true };
   }
 
   const isLong =

@@ -106,7 +106,8 @@ export interface NativeRequests {
    * Types into the session's shell as if the user had.
    *
    * `text` may contain `\b` (0x08, delete backwards), `ESC [ D` / `ESC [ C` (cursor left/right)
-   * and `\n` (run the command). `insertionBuffer` is the edit buffer the insertion was computed
+   * and one `\n` at the very end (run the command); the page never sends any other C0 or C1
+   * control character or DEL. `insertionBuffer` is the edit buffer the insertion was computed
    * against: if the user has typed further in the meantime the wrapper reconciles first.
    */
   "shell.insert": { params: { sessionId: SessionId; text: string; insertionBuffer?: string }; result: null };

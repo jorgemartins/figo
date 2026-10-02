@@ -29,7 +29,14 @@ export interface IconContext {
   iconDirectory?: string;
 }
 
-const SAFE_PROTOCOLS = new Set(["fig:", "figo:", "icon:", "http:", "https:", "data:", "file:", "blob:"]);
+/**
+ * Icons load only from the app (`fig:`, its alias `icon:`, `figo:`) or from the URL itself
+ * (`data:`). Bundled specs name ~1,200 icons on raw.githubusercontent.com and other hosts; fetching
+ * them while typing would tell those hosts what is being completed, so they get the default icon.
+ * The page's Content-Security-Policy says the same.
+ */
+const IMAGE_PROTOCOLS = new Set(["fig:", "figo:", "icon:", "data:"]);
+const BLOCKED_PROTOCOLS = new Set(["http:", "https:", "file:", "blob:", "ftp:", "ws:", "wss:"]);
 const HEX_COLOR = /^[0-9a-f]{6}$/i;
 
 function colorParam(url: URL): string | undefined {
@@ -92,11 +99,15 @@ function resolveFigUrl(url: URL): IconSpec {
 
 function parseUrl(icon: string): URL | null {
   try {
-    const url = new URL(icon);
-    return SAFE_PROTOCOLS.has(url.protocol) ? url : null;
+    return new URL(icon);
   } catch {
     return null;
   }
+}
+
+/** A URL of a kind that is never loaded (the web, the disk), as opposed to text with a colon. */
+function isBlockedUrl(url: URL, icon: string): boolean {
+  return !IMAGE_PROTOCOLS.has(url.protocol) && (icon.includes("://") || BLOCKED_PROTOCOLS.has(url.protocol));
 }
 
 function extensionOf(name: string): string | undefined {
@@ -153,7 +164,10 @@ export function resolveIcon(suggestion: Pick<Suggestion, "icon" | "type" | "name
     return { kind: "text", text: icon };
   }
   const url = parseUrl(icon);
-  if (!url) {
+  if (url !== null && isBlockedUrl(url, icon)) {
+    return defaultIcon(suggestion, context);
+  }
+  if (url === null || !IMAGE_PROTOCOLS.has(url.protocol)) {
     return { kind: "text", text: icon };
   }
   if (url.protocol === "fig:" || url.protocol === "icon:") {

@@ -250,11 +250,38 @@ describe("upstream parser vectors", () => {
     expect(result.commandIndex).toBe(2);
   });
 
-  it("applies the repeat limit to parsing and suggestions alike", async () => {
-    // `-n` is not repeatable, so a second `-n` cannot be an option.
+  it("accepts a repeated option when parsing, as upstream (review H8)", async () => {
+    // `-n` is not repeatable, so the list stops offering it; a second one is still an option, not
+    // the first argument (which threw the rest of the line off).
     const result = await parse("cmd man -n -n ");
-    expect(result.passedOptions.map((option) => option.name[0])).toEqual(["-n"]);
+    expect(result.passedOptions.map((option) => option.name[0])).toEqual(["-n", "-n"]);
+    expect(result.currentArg?.source).toBe(arg(child("man"), 0));
+    const withArgs = await parse("cmd man -m a -m b x ");
+    expect(withArgs.passedOptions.map((option) => option.name[0])).toEqual(["-m", "-m"]);
+    expect(withArgs.currentArg?.source).toBe(arg(child("man"), 1));
+    const attached = await parse("cmd man -ma -mb -nn ");
+    expect(attached.currentArg?.source).toBe(arg(child("man"), 0));
+  });
+
+  it("consumes a lone - as an argument, not as an empty option (review L20)", async () => {
+    const result = await parse("cmd man - ");
     expect(result.currentArg?.source).toBe(arg(child("man"), 1));
+    expect(result.passedOptions).toEqual([]);
+  });
+
+  it("uses a spec's own -- option (review L20)", async () => {
+    const dashes = convertSubcommand({
+      name: "run",
+      args: { name: "script" },
+      options: [{ name: "--", args: { name: "args", isVariadic: true } }, { name: "-x" }],
+    });
+    const ctx = { ...context(), loadSpec: async () => dashes };
+    const after = await parseArguments(["run", "build", "--", ""], ctx);
+    expect(after.currentArg?.source).toBe(dashes.options.get("--")?.args[0]);
+    // What follows is the option's argument, never an option.
+    const later = await parseArguments(["run", "build", "--", "-x", ""], ctx);
+    expect(later.currentArg?.source).toBe(dashes.options.get("--")?.args[0]);
+    expect(later.flags).toBe(Args);
   });
 
   it("keeps argument objects identical while the last token changes", async () => {

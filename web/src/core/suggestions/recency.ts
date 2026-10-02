@@ -9,6 +9,16 @@ export interface KeyValueStorage {
 }
 
 const STORAGE_KEY = "figo.recency";
+/** Root commands remembered; the one used longest ago goes first. */
+export const MAX_RECENCY_COMMANDS = 100;
+/** Names remembered per root command. The whole index is rewritten on every pick, so it stays small. */
+export const MAX_RECENCY_NAMES = 50;
+
+/** The `limit` entries with the highest values. */
+function newest(entries: Record<string, number>, limit: number): Record<string, number> {
+  const pairs = Object.entries(entries);
+  return pairs.length <= limit ? entries : Object.fromEntries(pairs.sort((a, b) => b[1] - a[1]).slice(0, limit));
+}
 
 export function memoryStorage(): KeyValueStorage {
   const values = new Map<string, string>();
@@ -44,7 +54,16 @@ export class RecencyIndex {
     if (name.includes("↪") || rootCommand === "") {
       return;
     }
-    this.index = { ...this.index, [rootCommand]: { ...this.index[rootCommand], [name]: at } };
+    const names = newest({ ...this.index[rootCommand], [name]: at }, MAX_RECENCY_NAMES);
+    let index = { ...this.index, [rootCommand]: names };
+    if (Object.keys(index).length > MAX_RECENCY_COMMANDS) {
+      const lastPicks = Object.fromEntries(
+        Object.entries(index).map(([command, picks]) => [command, Math.max(...Object.values(picks ?? {}))]),
+      );
+      const kept = newest(lastPicks, MAX_RECENCY_COMMANDS);
+      index = Object.fromEntries(Object.entries(index).filter(([command]) => command in kept));
+    }
+    this.index = index;
     try {
       this.storage.setItem(STORAGE_KEY, JSON.stringify(this.index));
     } catch {
