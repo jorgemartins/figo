@@ -1,0 +1,23 @@
+{
+  "name": "figo-specs",
+  "private": true,
+  "type": "module",
+  "description": "Compiles the community Fig completion specs (github.com/withfig/autocomplete, MIT) into the bundle Figo ships.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "figo": {
+    "source": "https://github.com/withfig/autocomplete.git",
+    "commit": "aef52acff84c45edde61ae610cc2c964802b9a38"
+  },
+  "dependencies": {
+    "@fig/autocomplete-generators": "^2.4.0",
+    "@fig/autocomplete-helpers": "^1.0.7",
+    "semver": "^7.8.5",
+    "strip-json-comments": "^5.0.3",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

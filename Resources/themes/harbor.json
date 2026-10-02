@@ -1,0 +1,19 @@
+{
+  "author": {
+    "name": "Figo"
+  },
+  "version": "1.0",
+  "theme": {
+    "textColor": "#d9ecf2",
+    "backgroundColor": "#0f2230",
+    "matchBackgroundColor": "#1f6f78",
+    "selection": {
+      "textColor": "#f2fbfc",
+      "backgroundColor": "#145c66"
+    },
+    "description": {
+      "textColor": "#8fb8c4",
+      "borderColor": "#1c3a4a"
+    }
+  }
+}

@@ -1,0 +1,436 @@
+/*
+ * The popup. Lengths that upstream wrote in rem are `calc(var(--rem) * n)` here: upstream's root
+ * font size is the popup font size (12.8px by default), so they scale with it. Literal-px values
+ * (5px icon gap and footer padding, 4px panel radius, 1px border, 200px panel) do not.
+ *
+ * Theme colours arrive as `--<name>: r g b` plus `--<name>-alpha` (and `-mark-alpha`, already at
+ * 80%, for the two match highlights).
+ */
+
+.figo-popup {
+  --rem: 12.8px;
+  --c-main-bg: rgb(var(--main-bg-color, 48 48 48) / var(--main-bg-color-alpha, 1));
+  --c-main-text: rgb(var(--main-text-color, 180 180 180) / var(--main-text-color-alpha, 1));
+  --c-matching-bg: rgb(var(--matching-bg-color, 95 89 56) / var(--matching-bg-color-mark-alpha, 0.8));
+  --c-selected-bg: rgb(var(--selected-bg-color, 30 90 199) / var(--selected-bg-color-alpha, 1));
+  --c-selected-text: rgb(var(--selected-text-color, 253 253 253) / var(--selected-text-color-alpha, 1));
+  --c-selected-matching-bg: rgb(
+    var(--selected-matching-bg-color, 106 142 218) / var(--selected-matching-bg-color-mark-alpha, 0.8)
+  );
+  --c-description-text: rgb(var(--description-text-color, 180 180 180) / var(--description-text-color-alpha, 1));
+  --c-description-border: rgb(var(--description-border-color, 65 65 65) / var(--description-border-color-alpha, 1));
+  --shadow: 0 0 3px 0 rgb(85 85 85);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* The window is sized to the page, so the page must never wrap to the window's last size. */
+  width: max-content;
+  font-size: var(--rem);
+  line-height: 1.5;
+  font-family:
+    var(
+      --font-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      Oxygen,
+      Ubuntu,
+      Cantarell,
+      "Open Sans",
+      "Helvetica Neue",
+      sans-serif
+    ),
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    "Open Sans",
+    "Helvetica Neue",
+    sans-serif;
+  font-style: normal;
+  font-weight: normal;
+  letter-spacing: normal;
+  text-align: left;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.figo-popup *,
+.figo-popup *::before,
+.figo-popup *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-width: 0;
+  border-style: solid;
+}
+
+.figo-popup strong {
+  font-weight: bolder;
+}
+
+/* Scrollbars that are not hidden (the side panel text when it overflows). */
+.figo-popup *::-webkit-scrollbar {
+  width: var(--rem);
+}
+.figo-popup *::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+.figo-popup *::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  border-radius: 9999px;
+  background-color: var(--c-description-border);
+  background-clip: content-box;
+}
+
+/* The padding holds the shadows; the window itself has none. */
+.figo-frame {
+  display: flex;
+  flex-direction: row;
+  gap: calc(var(--rem) * 0.375);
+  padding: calc(var(--rem) * 0.25);
+}
+
+.figo-list-container {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: hidden;
+  border-radius: calc(var(--rem) * 0.25);
+  background-color: var(--c-main-bg);
+  box-shadow: var(--shadow);
+}
+
+.figo-list {
+  position: relative;
+  flex: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: calc(var(--rem) * 0.25);
+  scrollbar-width: none;
+}
+.figo-list::-webkit-scrollbar {
+  display: none;
+}
+.figo-list.has-footer {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.figo-list.is-shaking {
+  animation: figo-shake 0.5s infinite;
+}
+
+.figo-list-content {
+  position: relative;
+  width: 100%;
+}
+
+/* Rows: no separators, no hover state. */
+.figo-row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  overflow: hidden;
+  padding-left: calc(var(--rem) * 0.375);
+}
+.figo-row.is-selected {
+  background-color: var(--c-selected-bg);
+  /* Dims the whole row, icon and text included, as upstream does. */
+  filter: brightness(0.95);
+}
+
+.figo-icon {
+  display: flex;
+  flex: none;
+  margin-right: 5px;
+}
+
+.figo-row-clip {
+  overflow: hidden;
+}
+
+.figo-text {
+  font-family:
+    var(--font-family, Monaco, Hack, monospace),
+    Monaco,
+    Hack,
+    monospace;
+  color: var(--c-main-text);
+}
+
+.figo-row-text {
+  width: fit-content;
+  white-space: nowrap;
+}
+.figo-row-text[data-active-item] {
+  color: var(--c-selected-text);
+}
+
+.figo-match {
+  background-color: var(--c-matching-bg);
+  color: inherit;
+  filter: brightness(0.95);
+}
+.figo-match > span {
+  filter: brightness(1.25);
+}
+.figo-row-text[data-active-item] .figo-match {
+  background-color: var(--c-selected-matching-bg);
+}
+
+.figo-prefix {
+  background-color: transparent;
+  color: inherit;
+  text-decoration-line: underline;
+}
+
+.figo-args {
+  opacity: 0.5;
+}
+
+/* Icons */
+.figo-icon-image {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+}
+.figo-icon-image > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left top;
+}
+.figo-icon-badge-center {
+  position: relative;
+  place-self: center;
+  color: #fff;
+  text-align: center;
+}
+.figo-icon-badge-corner {
+  position: relative;
+  display: flex;
+  width: calc(var(--rem) * 0.625);
+  height: calc(var(--rem) * 0.625);
+  place-content: center;
+  place-self: end;
+  background-repeat: no-repeat;
+  background-size: contain;
+  color: #fff;
+  font-size: 80%;
+}
+.figo-icon-text {
+  position: relative;
+  right: calc(var(--rem) * 0.0625);
+  padding-bottom: calc(var(--rem) * 0.625);
+}
+
+/* Descriptions: the footer, the side panel and the argument hint box share these. */
+.figo-footer-row {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.figo-description {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  align-items: center;
+  align-self: flex-start;
+  justify-content: space-between;
+  overflow: hidden scroll;
+  border: 0 solid var(--c-description-border);
+  background-color: var(--c-main-bg);
+  color: var(--c-description-text);
+  font-style: italic;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+.figo-description::-webkit-scrollbar,
+.figo-description-text::-webkit-scrollbar,
+.figo-hint::-webkit-scrollbar,
+.figo-footer-row::-webkit-scrollbar {
+  display: none;
+}
+
+.figo-footer {
+  padding: 0 5px;
+  border-top-width: 1px;
+}
+
+.figo-argument {
+  padding: 0 calc(var(--rem) * 0.5);
+}
+
+.figo-description-text {
+  flex-shrink: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.figo-no-description {
+  color: #8c8c8c;
+}
+
+.figo-hint {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 0 calc(var(--rem) * 0.25);
+  border-radius: calc(var(--rem) * 0.25);
+  background-color: var(--c-main-bg);
+  color: var(--c-description-text);
+  font-style: italic;
+  scrollbar-width: none;
+}
+
+.figo-panel {
+  z-index: 1;
+  flex: none;
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  white-space: normal;
+}
+
+.figo-panel-column {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: calc(var(--rem) * 0.25);
+  padding-top: calc(var(--rem) * 0.125);
+  padding-bottom: calc(var(--rem) * 0.25);
+}
+
+.figo-panel-text {
+  flex-shrink: 1;
+  overflow-y: auto;
+  padding-right: calc(var(--rem) * 0.25);
+  padding-left: calc(var(--rem) * 0.375);
+}
+
+.figo-hint-pill {
+  width: fit-content;
+  align-self: flex-end;
+  justify-content: center;
+  margin: 0 calc(var(--rem) * 0.25);
+  background-color: var(--c-description-border);
+  font-size: calc(var(--rem) * 0.75);
+  line-height: var(--rem);
+}
+
+/* Loading: replaces the whole popup. */
+.figo-loading {
+  margin: 0 calc(var(--rem) * 0.25);
+  padding: calc(var(--rem) * 0.625) calc(var(--rem) * 0.375);
+  border-radius: calc(var(--rem) * 0.25);
+  background-color: var(--c-main-bg);
+  color: var(--c-selected-text);
+}
+.figo-loading-track {
+  position: relative;
+  display: flex;
+  width: 20px;
+  align-items: center;
+  justify-content: center;
+}
+.figo-loading-dot {
+  position: absolute;
+  left: 0;
+  width: calc(var(--rem) * 0.25);
+  height: calc(var(--rem) * 0.25);
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation-duration: 0.66s;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0, 1, 1, 0);
+}
+.figo-loading-grow {
+  animation-name: figo-dot-grow;
+}
+.figo-loading-slide {
+  animation-name: figo-dot-slide;
+}
+.figo-loading-second {
+  left: 8px;
+}
+.figo-loading-shrink {
+  left: 16px;
+  animation-name: figo-dot-shrink;
+}
+
+@keyframes figo-dot-grow {
+  from {
+    transform: scale(0);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes figo-dot-shrink {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(0);
+  }
+}
+@keyframes figo-dot-slide {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(14px);
+  }
+}
+
+@keyframes figo-shake {
+  0% {
+    transform: translate(1px, 1px) rotate(0deg);
+  }
+  10% {
+    transform: translate(-1px, -2px) rotate(-1deg);
+  }
+  20% {
+    transform: translate(-3px, 0) rotate(1deg);
+  }
+  30% {
+    transform: translate(3px, 2px) rotate(0deg);
+  }
+  40% {
+    transform: translate(1px, -1px) rotate(1deg);
+  }
+  50% {
+    transform: translate(-1px, 2px) rotate(-1deg);
+  }
+  60% {
+    transform: translate(-3px, 1px) rotate(0deg);
+  }
+  70% {
+    transform: translate(3px, 1px) rotate(-1deg);
+  }
+  80% {
+    transform: translate(-1px, -1px) rotate(1deg);
+  }
+  90% {
+    transform: translate(1px, 2px) rotate(0deg);
+  }
+  100% {
+    transform: translate(1px, -2px) rotate(-1deg);
+  }
+}

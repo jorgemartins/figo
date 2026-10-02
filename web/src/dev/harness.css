@@ -1,0 +1,220 @@
+/* Dev harness only: a mock macOS terminal for the popup to sit on. */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #161618;
+  color: #d8d8dc;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#root {
+  height: 100%;
+}
+
+.harness {
+  display: flex;
+  min-height: 100%;
+}
+
+.harness-side {
+  display: flex;
+  width: 260px;
+  flex: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-right: 1px solid #2c2c30;
+  background: #1c1c1f;
+}
+
+.harness-side h1 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.harness-help,
+.harness-note {
+  margin: 0;
+  color: #9a9aa2;
+  font-size: 12px;
+}
+
+.harness-note {
+  color: #c8c8d0;
+}
+
+.harness-scenarios {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.harness-scenarios button {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.harness-scenarios button:hover {
+  background: #2a2a2f;
+}
+
+.harness-scenarios button.is-current {
+  background: #2f4f86;
+  color: #fff;
+}
+
+.harness-theme select {
+  margin-left: 6px;
+  font: inherit;
+}
+
+.harness-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #9a9aa2;
+  font-size: 11px;
+}
+
+.harness-requests code {
+  color: #c8c8d0;
+  font: 11px ui-monospace, Menlo, monospace;
+}
+
+.harness-stage {
+  flex: 1;
+  min-width: 0;
+}
+
+.desktop {
+  display: flex;
+  min-height: 100%;
+  box-sizing: border-box;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 36px;
+  background: linear-gradient(170deg, #412ab7 0%, #1d1a8f 30%, #00075a 70%, #000536 100%);
+}
+
+.terminal {
+  position: relative;
+  width: 860px;
+  height: 440px;
+  flex: none;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #0b1f2e 0%, #0a1d2b 100%);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.14),
+    0 20px 50px rgb(0 0 0 / 0.5);
+}
+
+.traffic {
+  position: absolute;
+  top: 15.5px;
+  left: 16.5px;
+  display: flex;
+  gap: 10px;
+}
+
+.traffic i {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+}
+
+.traffic .red {
+  background: #ff5f57;
+}
+.traffic .yellow {
+  background: #febc2e;
+}
+.traffic .green {
+  background: #28c840;
+}
+
+.term-body {
+  position: absolute;
+  top: 44px;
+  right: 7px;
+  left: 7px;
+  color: #a4c1c2;
+  font: 10.8px/14.5px ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre;
+}
+
+.term-line {
+  height: 14.5px;
+}
+
+.tone-teal {
+  color: #499086;
+}
+
+.seg {
+  display: inline-block;
+  height: 14.5px;
+  vertical-align: top;
+}
+
+.seg-blue {
+  background: #3b74c1;
+  color: #e3ecf6;
+}
+
+.seg-green {
+  background: #80bc75;
+  color: #0c2730;
+}
+
+.tip {
+  display: inline-block;
+  width: 1ch;
+  height: 14.5px;
+  vertical-align: top;
+}
+
+.tip::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  content: "";
+}
+
+.tip-blue::before {
+  background: #3b74c1;
+}
+
+.tip-blue-green {
+  background: #80bc75;
+}
+
+.tip-blue-green::before {
+  background: #3b74c1;
+}
+
+.tip-green::before {
+  background: #80bc75;
+}
+
+.caret {
+  display: inline-block;
+  width: 1ch;
+  height: 14.5px;
+  vertical-align: top;
+  background: #65727b;
+}
+
+.popup-window {
+  position: absolute;
+  z-index: 10;
+  overflow: hidden;
+}

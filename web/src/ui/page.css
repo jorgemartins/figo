@@ -1,0 +1,16 @@
+/*
+ * The document inside the app's popup window. Absolute positioning makes it shrink-wrap the
+ * popup, whose measured size the window is then given; the page stays transparent so only the
+ * popup and its shadow are visible.
+ */
+html.figo-page {
+  position: absolute;
+  z-index: 1;
+  overflow: hidden;
+  background: transparent;
+}
+
+html.figo-page body {
+  margin: 0;
+  background: transparent;
+}

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-popup-harness",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "web", "exec", "vite", "--port", "5174", "--strictPort"],
+      "env": { "FIGO_THEMES_DIR": "../build/.cache/fig-themes/themes" },
+      "port": 5174
+    }
+  ]
+}
