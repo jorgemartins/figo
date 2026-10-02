@@ -1,0 +1,23 @@
+# Swift
+.build/
+*.xcodeproj
+.swiftpm/
+DerivedData/
+
+# Web
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Build output
+/build/
+/specs/.cache/
+/specs/dist/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Private research notes, kept locally only
+/docs/research/
