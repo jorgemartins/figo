@@ -51,14 +51,15 @@ undoes everything `figo install` did (then drag Figo.app to the Trash).
 ### With Homebrew
 
 ```bash
-brew trust --tap jorgemartins/figo
 brew tap jorgemartins/figo https://github.com/jorgemartins/figo
+brew trust --tap jorgemartins/figo
 brew install --cask figo
 figo install
 ```
 
 The first two lines tell Homebrew about this repository, which carries its own cask, and are
-only needed once. `figo install` is the setup step described above, which Homebrew does not run
+only needed once. Keep them in that order: Homebrew only accepts the trust once it knows where
+the tap comes from. `figo install` is the setup step described above, which Homebrew does not run
 for you. Then open a new terminal window.
 
 - **Fig's themes** are not part of the Homebrew package. To add them:
