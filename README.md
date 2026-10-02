@@ -48,9 +48,30 @@ curl -fsSL https://raw.githubusercontent.com/jorgemartins/figo/main/install.sh |
 Run the same command again to update. `figo doctor` checks every piece, and `figo uninstall`
 undoes everything `figo install` did (then drag Figo.app to the Trash).
 
+### With Homebrew
+
+```bash
+brew trust --tap jorgemartins/figo
+brew tap jorgemartins/figo https://github.com/jorgemartins/figo
+brew install --cask figo
+figo install
+```
+
+The first two lines tell Homebrew about this repository, which carries its own cask, and are
+only needed once. `figo install` is the setup step described above, which Homebrew does not run
+for you. Then open a new terminal window.
+
+- **Fig's themes** are not part of the Homebrew package. To add them:
+  `curl -fsSL https://raw.githubusercontent.com/jorgemartins/figo/main/install.sh | sh -s -- --themes-only`
+- **Updating:** `brew upgrade --cask figo`, then `figo install` again.
+- **Removing:** `figo uninstall`, then `brew uninstall --cask figo`.
+
+Use one way of installing or the other, not both: the curl script replaces
+`/Applications/Figo.app` without telling Homebrew.
+
 ### About the "unidentified developer" warning
 
-Figo is not signed with an Apple developer certificate. Installed with the command above, it
+Figo is not signed with an Apple developer certificate. Installed in either way above, it
 opens normally. If you download `Figo.zip` from the releases page with a browser instead,
 macOS will refuse to open it until you clear the download flag:
 
@@ -103,6 +124,7 @@ terminal ⇄ figoterm ⇄ your shell           figoterm: a pty wrapper. Passes e
 | `shell/` | Integration scripts for zsh, bash and fish |
 | `web/` | The popup: `src/core` (completion engine), `src/ui` (React), `src/bridge` (contract with the app) |
 | `specs/` | Builds the completion specs at a pinned commit |
+| `Casks/` | The Homebrew cask; this repository doubles as its own tap |
 
 ## Build from source
 
@@ -138,8 +160,9 @@ scripts/release.sh --publish   # also creates the GitHub release v<version>
 ```
 
 The version comes from `Sources/FigoCore/Figo.swift`. `install.sh` always installs the latest
-release, so publishing one is all it takes to ship an update. A release leaves Fig's themes
-out; `install.sh` fetches them on each Mac.
+release, and `--publish` also commits and pushes `Casks/figo.rb` pointing at the new version,
+so publishing is all it takes to ship an update. A release leaves Fig's themes out;
+`install.sh` fetches them on each Mac.
 
 ### Debugging
 

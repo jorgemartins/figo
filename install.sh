@@ -4,7 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/jorgemartins/figo/main/install.sh | sh
 #
 # Options go after `sh -s --`, for example `... | sh -s -- --disable-conflicts`:
-#   --no-themes   do not download the themes Fig shipped (dracula, nightowl, solarized, ...)
+#   --no-themes     do not download the themes Fig shipped (dracula, nightowl, solarized, ...)
+#   --themes-only   only download those themes, for a Figo that is already installed
+#                   (for example with Homebrew)
 #   other options are passed on to `figo install` (--disable-conflicts, --shells zsh,fish, ...)
 #
 # Environment:
@@ -24,6 +26,17 @@ fail() {
   exit 1
 }
 
+# Downloads Fig's themes and copies them into the user's themes folder with the given `figo`.
+fetch_themes() {
+  say "Fetching Fig's themes"
+  if curl -fsSL "https://codeload.github.com/withfig/themes/tar.gz/$themes_commit" | tar -xz -C "$work" 2>/dev/null \
+    && [ -d "$work/themes-$themes_commit/themes" ]; then
+    "$1" theme import "$work/themes-$themes_commit/themes"
+  else
+    return 1
+  fi
+}
+
 # Everything runs from this function, called on the last line, so that a download cut short
 # cannot run half of the script.
 main() {
@@ -32,6 +45,7 @@ main() {
   target="$app_dir/Figo.app"
 
   themes=1
+  themes_only=0
   remaining=$#
   while [ "$remaining" -gt 0 ]; do
     argument="$1"
@@ -39,11 +53,25 @@ main() {
     remaining=$((remaining - 1))
     case "$argument" in
       --no-themes) themes=0 ;;
+      --themes-only) themes_only=1 ;;
       *) set -- "$@" "$argument" ;;
     esac
   done
 
   [ "$(uname -s)" = "Darwin" ] || fail "Figo only runs on macOS."
+
+  if [ "$themes_only" -eq 1 ]; then
+    if [ -x "$target/Contents/MacOS/figo" ]; then
+      figo="$target/Contents/MacOS/figo"
+    else
+      figo="$(command -v figo)" || fail "Figo is not installed (no $target and no figo command)."
+    fi
+    work="$(mktemp -d "${TMPDIR:-/tmp}/figo-install.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    fetch_themes "$figo" || fail "could not download the themes."
+    return
+  fi
+
   [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ] \
     || fail "this build of Figo needs an Apple Silicon Mac. On an Intel Mac, build it from source (see the README)."
   macos="$(sw_vers -productVersion)"
@@ -88,13 +116,7 @@ main() {
   figo="$target/Contents/MacOS/figo"
 
   if [ "$themes" -eq 1 ]; then
-    say "Fetching Fig's themes"
-    if curl -fsSL "https://codeload.github.com/withfig/themes/tar.gz/$themes_commit" | tar -xz -C "$work" 2>/dev/null \
-      && [ -d "$work/themes-$themes_commit/themes" ]; then
-      "$figo" theme import "$work/themes-$themes_commit/themes"
-    else
-      echo "Could not fetch them; Figo's own themes are still there." >&2
-    fi
+    fetch_themes "$figo" || echo "Could not fetch them; Figo's own themes are still there." >&2
   fi
 
   say "Setting up"
