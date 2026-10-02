@@ -124,12 +124,18 @@ public struct EditBuffer: Codable, Equatable, Sendable {
   /// Where the terminal cursor is on the screen grid, for positioning when nothing better is known.
   public var cursorCell: GridPosition
   public var grid: GridSize
+  /// True when this session is where the keyboard is: keys reached it since its prompt was
+  /// drawn, or it has only just started. A terminal sends keys to the tab that has the focus, so
+  /// this tells the tab being typed in from one whose command finished in the background.
+  /// Nil from wrappers that predate it.
+  public var typed: Bool?
 
-  public init(text: String, cursor: Int, cursorCell: GridPosition, grid: GridSize) {
+  public init(text: String, cursor: Int, cursorCell: GridPosition, grid: GridSize, typed: Bool? = nil) {
     self.text = text
     self.cursor = cursor
     self.cursorCell = cursorCell
     self.grid = grid
+    self.typed = typed
   }
 }
 

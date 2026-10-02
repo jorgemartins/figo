@@ -135,6 +135,25 @@ private func makeTerminal(_ columns: Int = 10, _ rows: Int = 4, _ input: String 
     #expect(screen(terminal) == ["a", "c", "", ""])
   }
 
+  @Test func shiftingAWholeRegionClearsIt() {
+    // Each of these moves every row of the region out of it, which used to stop the program.
+    let filled = "a\r\nb\r\nc\r\nd"
+    // Delete line and insert line with the cursor on the last row.
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[4;1H\u{1b}[M")) == ["a", "b", "c", ""])
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[4;1H\u{1b}[L")) == ["a", "b", "c", ""])
+    // More lines than the screen has, from the top.
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[H\u{1b}[9M")) == ["", "", "", ""])
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[H\u{1b}[4L")) == ["", "", "", ""])
+    // Scroll up and down by the height of the screen or more.
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[4S")) == ["", "", "", ""])
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[99T")) == ["", "", "", ""])
+    // Inside a scroll region only that region goes.
+    #expect(screen(makeTerminal(5, 4, filled + "\u{1b}[2;3r\u{1b}[2S")) == ["a", "", "", "d"])
+    // A line feed in a terminal one row high.
+    let single = makeTerminal(5, 1, "ab\r\ncd")
+    #expect(screen(single) == ["cd"])
+  }
+
   @Test func saveAndRestoreCursor() {
     let terminal = makeTerminal(10, 2, "ab\u{1b}7\r\ncd\u{1b}8X")
     #expect(screen(terminal) == ["abX", "cd"])

@@ -30,12 +30,33 @@ done
 version="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' Sources/FigoCore/Figo.swift | head -n 1)"
 out="build/release"
 
+if [[ $publish -eq 1 ]]; then
+  # A release is a tag on a commit that everyone can see, built from exactly that commit.
+  # Untracked files count: a new source file that was never added builds here and is missing
+  # from the tag.
+  if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+    echo "error: there are uncommitted or untracked changes; commit or remove them before publishing" >&2
+    exit 1
+  fi
+  git fetch --quiet origin
+  if [[ "$(git rev-parse HEAD)" != "$(git rev-parse '@{upstream}' 2>/dev/null)" ]]; then
+    echo "error: this commit is not what is on GitHub; push (or pull) before publishing" >&2
+    exit 1
+  fi
+  if gh release view "v$version" >/dev/null 2>&1; then
+    echo "error: release v$version already exists; raise the version in Sources/FigoCore/Figo.swift" >&2
+    exit 1
+  fi
+fi
+
 # The page is always rebuilt. The specs are pinned to a commit, so an existing specs/dist is reused.
 rm -rf "$out"
 FIGO_BUNDLE_DIR="$out" FIGO_SKIP_COMMUNITY_THEMES=1 scripts/bundle.sh
 
-# ditto keeps the code signature and symlinks intact, which plain zip does not.
-ditto -c -k --keepParent "$out/Figo.app" "$out/Figo.zip"
+# ditto keeps the code signature and symlinks intact, which plain zip does not. Extended
+# attributes and resource forks are left out: they would add a `._` twin for every file, which
+# an unzip other than Apple's unpacks into the bundle, breaking its signature.
+ditto -c -k --norsrc --noextattr --keepParent "$out/Figo.app" "$out/Figo.zip"
 (cd "$out" && shasum -a 256 Figo.zip >Figo.zip.sha256)
 
 echo
@@ -59,7 +80,10 @@ update_cask() {
   echo "Casks/figo.rb now names $version."
 }
 
-command=(gh release create "v$version" "$out/Figo.zip" "$out/Figo.zip.sha256" --title "Figo $version" --generate-notes)
+command=(
+  gh release create "v$version" "$out/Figo.zip" "$out/Figo.zip.sha256"
+  --target "$(git rev-parse HEAD)" --title "Figo $version" --generate-notes
+)
 if [[ $publish -eq 1 ]]; then
   "${command[@]}"
   update_cask || echo "warning: the release is published, but Casks/figo.rb could not be updated and pushed." >&2

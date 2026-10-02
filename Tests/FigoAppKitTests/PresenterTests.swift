@@ -129,6 +129,24 @@ import Testing
     #expect(window.isVisible)
   }
 
+  @Test func aSessionInAnUnknownTerminalOnlyShowsOverATerminal() async {
+    // Inside tmux: the terminal is one of the ones sessions were started from, never a browser.
+    var target = PopupTarget(hasText: true, terminalBundleId: nil)
+    target.possibleTerminalBundleIds = ["com.mitchellh.ghostty", "com.apple.Terminal"]
+    desktop.frontmostApplication = RunningApp(bundleId: "com.apple.Safari", pid: 9)
+    caret.reading?.bundleId = nil
+    presenter.target = target
+    presenter.commandLineChanged()
+    await presenter.settle()
+    _ = requestSize()
+    #expect(!window.isVisible)
+
+    desktop.frontmostApplication = RunningApp(bundleId: "com.apple.Terminal", pid: 10)
+    presenter.commandLineChanged()
+    await presenter.settle()
+    #expect(window.isVisible)
+  }
+
   @Test func respectsTheDisableSetting() async {
     var disabled = true
     presenter.isDisabled = { disabled }
@@ -184,6 +202,21 @@ import Testing
     #expect(result.isClipped)
     #expect(window.frame == frame)
     #expect(presenter.requestedSize == CGSize(width: 320, height: 140))
+  }
+
+  @Test func aPageThatWentAwayHidesAndStaysHiddenUntilTheNextOneAsks() async {
+    await type()
+    _ = requestSize()
+    #expect(window.isVisible)
+
+    presenter.pageUnloaded()
+    #expect(!window.isVisible)
+    #expect(transitions.last?.1 == .pageUnloaded)
+    // Typing on does not bring back what the old page had asked for.
+    await type("git c")
+    #expect(!window.isVisible)
+    _ = requestSize()
+    #expect(window.isVisible)
   }
 
   @Test func appInitiatedHidesReportTheReason() async {

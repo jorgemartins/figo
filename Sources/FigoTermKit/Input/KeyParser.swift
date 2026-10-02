@@ -79,6 +79,16 @@ public enum KeyName {
 public struct KeyParser: Sendable {
   private var pending: [UInt8] = []
 
+  /// True between the markers a terminal puts around pasted text (`ESC [ 200 ~` … `ESC [ 201 ~`).
+  /// Nothing inside a paste is a key press, however large the paste is and however slowly it
+  /// arrives: a pasted Return must reach the shell, not accept a suggestion.
+  public private(set) var isInPaste = false
+  /// How much of the marker that would change `isInPaste` has been seen so far.
+  private var markerProgress = 0
+
+  private static let pasteStart: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]
+  private static let pasteEnd: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]
+
   public init() {}
 
   /// True when input is being held back because it may be the start of a longer sequence.
@@ -90,26 +100,89 @@ public struct KeyParser: Sendable {
   /// arrives. The caller should call again with `flush` true after a short pause, at which
   /// point a lone ESC is the Escape key and anything else incomplete is passed through.
   public mutating func parse(_ input: [UInt8], flush: Bool) -> [InputToken] {
-    pending.append(contentsOf: input)
     var tokens: [InputToken] = []
     var index = 0
 
+    // The opening marker can be split between input that was only observed and input that is
+    // parsed: its first bytes have gone to the shell already, and the rest follows them.
+    if !isInPaste, markerProgress > 0, pending.isEmpty {
+      var matched = 0
+      while matched < input.count, !isInPaste, markerProgress > 0, input[matched] == Self.pasteStart[markerProgress] {
+        followMarker(input[matched])
+        matched += 1
+      }
+      if matched < input.count, !isInPaste { markerProgress = 0 }
+      if matched > 0 { tokens.append(InputToken(bytes: Array(input[..<matched]), key: nil)) }
+      pending.append(contentsOf: input[matched...])
+    } else {
+      pending.append(contentsOf: input)
+    }
+
     while index < pending.count {
+      if isInPaste {
+        // Passed on as it comes; only the marker that ends the paste is looked for.
+        let start = index
+        while index < pending.count, isInPaste {
+          followMarker(pending[index])
+          index += 1
+        }
+        tokens.append(InputToken(bytes: Array(pending[start..<index]), key: nil))
+        continue
+      }
       switch next(from: index, flush: flush) {
       case .token(let token):
         index += token.bytes.count
         tokens.append(token)
+      case .pasteStart(let token):
+        index += token.bytes.count
+        tokens.append(token)
+        isInPaste = true
+        markerProgress = 0
       case .incomplete:
         pending.removeFirst(index)
         return tokens
       }
     }
     pending.removeAll(keepingCapacity: true)
+    // The other way round: the start of an opening marker was held back and is now let through
+    // because parsing stops here. `observe` has to know how far it had got.
+    if flush, !isInPaste, let last = tokens.last, last.key == nil, last.bytes.count < Self.pasteStart.count,
+      Self.pasteStart.starts(with: last.bytes)
+    {
+      markerProgress = last.bytes.count
+    }
     return tokens
+  }
+
+  /// Follows the paste markers in input that is passed on without being parsed, so that a paste
+  /// already under way is known about if parsing starts in the middle of it.
+  public mutating func observe(_ input: [UInt8]) {
+    for byte in input { followMarker(byte) }
+  }
+
+  /// Forgets a paste whose end never arrived. For when a new command line starts.
+  public mutating func endPaste() {
+    isInPaste = false
+    markerProgress = 0
+  }
+
+  private mutating func followMarker(_ byte: UInt8) {
+    let marker = isInPaste ? Self.pasteEnd : Self.pasteStart
+    if byte == marker[markerProgress] {
+      markerProgress += 1
+      if markerProgress == marker.count {
+        isInPaste.toggle()
+        markerProgress = 0
+      }
+    } else {
+      markerProgress = byte == marker[0] ? 1 : 0
+    }
   }
 
   private enum Step {
     case token(InputToken)
+    /// The marker that opens a bracketed paste.
+    case pasteStart(InputToken)
     case incomplete
   }
 
@@ -230,23 +303,10 @@ public struct KeyParser: Sendable {
     let parameterText = String(decoding: pending[start + 2..<parametersEnd], as: UTF8.self)
 
     if final == 0x7e, parameterText == "200" {
-      return paste(from: start, contentStart: end, flush: flush)
+      return .pasteStart(InputToken(bytes: Array(pending[start..<end]), key: nil))
     }
     guard parametersEnd == index else { return token(start..<end, nil) }
     return token(start..<end, Self.csiKey(parameters: parameterText, final: final))
-  }
-
-  private func paste(from start: Int, contentStart: Int, flush: Bool) -> Step {
-    let terminator: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]
-    var index = contentStart
-    while index + terminator.count <= pending.count {
-      if pending[index] == 0x1b, pending[index..<index + terminator.count].elementsEqual(terminator) {
-        return token(start..<index + terminator.count, nil)
-      }
-      index += 1
-    }
-    // A paste can be far larger than one read; never hold more than a little of it back.
-    return flush || pending.count - start > 4096 ? token(start..<pending.count, nil) : .incomplete
   }
 
   // MARK: - Key tables
@@ -315,7 +375,8 @@ public struct KeyParser: Sendable {
 
   private static func keyName(codePoint: Int) -> String? {
     if let named = codePointKeys[codePoint] { return named }
-    guard codePoint >= 0x21, let scalar = Unicode.Scalar(UInt32(codePoint)) else { return nil }
+    // The number comes straight from the input and can be anything, including too big for 32 bits.
+    guard codePoint >= 0x21, let value = UInt32(exactly: codePoint), let scalar = Unicode.Scalar(value) else { return nil }
     // The private-use range carries keypad and media keys that nothing can be bound to.
     if (0xe000...0xf8ff).contains(codePoint) { return nil }
     return String(scalar)

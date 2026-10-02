@@ -25,7 +25,8 @@ enum Commands {
       theme set <name>   Switch theme
       theme import <dir> Copy theme files (*.json) from a folder into your themes
       debug type <text> [--session <id>]
-                         Type into a session as if on the keyboard (for testing)
+                         Type into a session as if on the keyboard (for testing; the app
+                         has to be started with FIGO_DEBUG_TOOLS=1)
       version
     """
 
@@ -74,25 +75,39 @@ enum Commands {
     let assets = try ShellAssets.locate()
     let integration = ShellIntegration()
 
-    let changed = try integration.install(
+    let outcome = try integration.install(
       shells: shells, assets: assets, disableConflicts: arguments.contains("--disable-conflicts"))
-    Output.ok("Shell integration installed for \(shells.map(\.rawValue).joined(separator: ", "))")
-    for file in changed { Output.hint("updated \(abbreviate(file.path))") }
-    if !changed.isEmpty { Output.hint("backups are in \(abbreviate(integration.backupsDirectory.path))") }
+    let status = integration.status(shells: shells, assets: assets)
+    let installed = shells.filter(status.isInstalled)
+    if !installed.isEmpty {
+      Output.ok("Shell integration installed for \(installed.map(\.rawValue).joined(separator: ", "))")
+    }
+    for file in outcome.changed { Output.hint("updated \(abbreviate(file.path))") }
+    if !outcome.changed.isEmpty { Output.hint("backups are in \(abbreviate(integration.backupsDirectory.path))") }
+    reportSkipped(outcome)
+    for shell in shells where !installed.contains(shell) {
+      Output.warn("\(shell.rawValue) is not fully set up. To do it by hand, put these at the top and the bottom of the file above:")
+      Output.hint(ShellDotfiles.sourceLine(.pre, shell: shell))
+      Output.hint(ShellDotfiles.sourceLine(.post, shell: shell))
+    }
 
-    let conflicts = integration.status(shells: shells, assets: assets).conflicts
+    let conflicts = status.conflicts
     if !conflicts.isEmpty {
       Output.warn("\(conflicts.joined(separator: " and ")) is also set up in your shell startup files.")
       Output.hint("Both would wrap your shell and show their own popup. Run `figo install --disable-conflicts`")
       Output.hint("to comment those lines out (undone by `figo uninstall`).")
     }
 
-    if !arguments.contains("--skip-input-method") {
+    // The input method and the running app belong to the real account, not to a home folder
+    // that FIGO_HOME points somewhere else for a trial run.
+    if isHomeRedirected {
+      Output.hint("FIGO_HOME is set: the input method and the app were left alone")
+    } else if !arguments.contains("--skip-input-method") {
       try installInputMethod()
     }
 
     linkCommandLineTool()
-    if !AppClient.isAppRunning, Locations.appBundle != nil {
+    if !isHomeRedirected, !AppClient.isAppRunning, Locations.appBundle != nil {
       try launch()
     }
     print("")
@@ -117,14 +132,42 @@ enum Commands {
     }
   }
 
+  private static var isHomeRedirected: Bool {
+    !(ProcessInfo.processInfo.environment["FIGO_HOME"] ?? "").isEmpty
+  }
+
+  private static func reportSkipped(_ outcome: ShellIntegration.Outcome) {
+    for skipped in outcome.skipped {
+      Output.warn("left \(abbreviate(skipped.file.path)) as it was: \(skipped.reason)")
+    }
+  }
+
+  private static var commandLineToolLink: URL {
+    FigoPaths.home.appendingPathComponent(".local/bin/figo")
+  }
+
+  /// A link to the `figo` inside some copy of Figo.app, which is the only thing at that path
+  /// that is ours to replace or remove.
+  private static func isOwnCommandLineToolLink(_ link: URL) -> Bool {
+    guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
+    return destination.hasSuffix("/Figo.app/Contents/MacOS/figo")
+  }
+
   /// Puts `figo` on the PATH when there is a conventional per-user bin directory for it.
   private static func linkCommandLineTool() {
     guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath(), Locations.appBundle != nil else { return }
-    let directory = FigoPaths.home.appendingPathComponent(".local/bin", isDirectory: true)
+    let link = commandLineToolLink
+    let directory = link.deletingLastPathComponent()
     guard FileManager.default.fileExists(atPath: directory.path) else { return }
-    let link = directory.appendingPathComponent("figo")
     if (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) == executable.path { return }
-    try? FileManager.default.removeItem(at: link)
+    // lstat-style check: a dangling link of ours still has to be replaced.
+    if (try? FileManager.default.attributesOfItem(atPath: link.path)) != nil {
+      guard isOwnCommandLineToolLink(link) else {
+        Output.warn("\(abbreviate(link.path)) is something else, so the `figo` command was not linked there")
+        return
+      }
+      try? FileManager.default.removeItem(at: link)
+    }
     if (try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: executable)) != nil {
       Output.ok("`figo` command linked into \(abbreviate(directory.path))")
     }
@@ -132,20 +175,20 @@ enum Commands {
 
   static func uninstall(_ arguments: [String]) throws {
     let integration = ShellIntegration()
-    let changed = try integration.uninstall()
+    let outcome = try integration.uninstall()
     Output.ok("Shell integration removed")
-    for file in changed { Output.hint("updated \(abbreviate(file.path))") }
+    for file in outcome.changed { Output.hint("updated \(abbreviate(file.path))") }
+    reportSkipped(outcome)
 
-    if let installer = try? Locations.inputMethodInstaller() {
+    if !isHomeRedirected, let installer = try? Locations.inputMethodInstaller() {
       let wasInstalled = MainActor.assumeIsolated { installer.status() }.registered || installer.bundleState() != .missing
       try MainActor.assumeIsolated { try installer.uninstall() }
       if wasInstalled { Output.ok("Input method removed") }
     }
-    let link = FigoPaths.home.appendingPathComponent(".local/bin/figo")
-    if (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil {
-      try? FileManager.default.removeItem(at: link)
+    if isOwnCommandLineToolLink(commandLineToolLink) {
+      try? FileManager.default.removeItem(at: commandLineToolLink)
     }
-    if AppClient.isAppRunning { try quit() }
+    if !isHomeRedirected, AppClient.isAppRunning { try quit() }
     print("")
     print("Terminals that are already open keep working until you close them.")
   }

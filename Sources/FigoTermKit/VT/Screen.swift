@@ -174,6 +174,13 @@ final class Screen {
       anchor = (top...bottom).contains(row) ? Position(row: row, column: current.column) : nil
     }
 
+    if amount == height {
+      // Everything in the region scrolls out. There is nothing left to move, and the ranges
+      // below would be empty ones written backwards.
+      for row in top...bottom { clearRow(row) }
+      return
+    }
+
     if count > 0 {
       let recycled = Array(rowMap[top..<top + amount])
       let recycledWrapped = [Bool](repeating: false, count: amount)

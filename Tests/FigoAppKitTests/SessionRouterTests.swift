@@ -51,6 +51,29 @@ final class RouterDelegateRecorder: SessionRouterDelegate {
     #expect(router.currentSessionId == "A")
   }
 
+  @Test func aSessionNobodyIsTypingInDoesNotTakeOver() {
+    router.receive(.editBuffer(editBuffer("git ch", typed: true)), from: "A")
+    // A command finishes in another tab: a fresh prompt there, then the text typed ahead.
+    router.receive(.editBuffer(editBuffer("", typed: false)), from: "B")
+    router.receive(.editBuffer(editBuffer("make", typed: false)), from: "B")
+    #expect(router.currentSessionId == "A")
+    #expect(delegate.bufferChanges == 1)
+    #expect(!delegate.events.contains { if case .editBuffer(sessionId: "B", _, _) = $0 { true } else { false } })
+
+    // Its command line was kept for when someone does type there.
+    router.receive(.editBuffer(editBuffer("make t", typed: true)), from: "B")
+    #expect(router.currentSessionId == "B")
+    #expect(router.currentSession?.editBuffer?.text == "make t")
+    // A tab that has only just opened has the keyboard, even with nothing typed yet.
+    router.receive(.editBuffer(editBuffer("", typed: true)), from: "A")
+    #expect(router.currentSessionId == "A")
+  }
+
+  @Test func theFirstSessionToReportIsCurrentEvenUntyped() {
+    router.receive(.editBuffer(editBuffer("", typed: false)), from: "B")
+    #expect(router.currentSessionId == "B")
+  }
+
   @Test func announcesTheSessionBeforeItsFirstEditBuffer() {
     router.receive(.shell(ShellInfo(shell: "zsh", shellPath: "/bin/zsh", pid: 7, cwd: "/tmp", user: "test")), from: "A")
     router.receive(.environment(variables: ["HOME": "/Users/env", "PATH": "/bin"], aliases: "ll='ls -l'"), from: "A")

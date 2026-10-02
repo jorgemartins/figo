@@ -9,6 +9,7 @@ import Foundation
 /// the user already trusts instead of prompting on behalf of Figo.
 enum HelperProcess {
   static let defaultTimeoutMilliseconds = 60_000
+  static let maximumTimeoutMilliseconds = 600_000
   /// Output beyond this is cut off; a generator has no use for more.
   private static let maxOutputBytes = 8 * 1024 * 1024
 
@@ -117,8 +118,9 @@ enum HelperProcess {
       return .failure("\(request.executable): \(String(cString: strerror(spawnResult)))")
     }
 
-    let timeout = request.timeoutMilliseconds ?? defaultTimeoutMilliseconds
-    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(timeout, 0)) * 1_000_000
+    // The number comes from a completion spec. Unbounded, the arithmetic below overflows.
+    let timeout = min(max(request.timeoutMilliseconds ?? defaultTimeoutMilliseconds, 0), maximumTimeoutMilliseconds)
+    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeout) * 1_000_000
     var output: [UInt8] = []
     var errorOutput: [UInt8] = []
     var timedOut = false

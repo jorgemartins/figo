@@ -36,6 +36,8 @@ public final class PopupWebHost: NSObject, PageSink, WKNavigationDelegate {
   private let pageURL: URL
   private var isReady = false
   private var queued: [PageEvent] = []
+  private var crashesInARow = 0
+  private var lastCrash: Date?
 
   /// `devURL` replaces the bundled page (`FIGO_WEB_URL`, the Vite dev server). The page keeps
   /// what should survive restarts in `localStorage`; with `persistentStorage` false nothing is
@@ -146,6 +148,8 @@ public final class PopupWebHost: NSObject, PageSink, WKNavigationDelegate {
 
   public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     isReady = false
+    // Keys pressed for the list the old page was showing mean nothing to the new one.
+    queued.removeAll { if case .keybinding = $0 { true } else { false } }
     handler?.pageWillLoad()
   }
 
@@ -160,8 +164,19 @@ public final class PopupWebHost: NSObject, PageSink, WKNavigationDelegate {
   }
 
   public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-    log.error("web content process terminated; reloading")
-    reload()
+    isReady = false
+    queued.removeAll { if case .keybinding = $0 { true } else { false } }
+    handler?.pageWillLoad()
+    // A page that keeps dying must not be reloaded in a tight loop, whether it dies before or
+    // after it reports ready. Only a minute without a crash starts the count again.
+    let now = Date()
+    crashesInARow = lastCrash.map { now.timeIntervalSince($0) < 60 } == true ? crashesInARow + 1 : 1
+    lastCrash = now
+    let delay = crashesInARow == 1 ? 0 : min(0.5 * pow(2, Double(crashesInARow - 2)), 30)
+    log.error("web content process terminated; reloading in \(delay)s")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+      MainActor.assumeIsolated { self?.reload() }
+    }
   }
 
   static func isSameOrigin(_ a: URL, _ b: URL) -> Bool {

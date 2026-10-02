@@ -30,6 +30,18 @@ public final class AppCore {
 
   /// What the page last reported through `app.reportState`, as JSON text.
   public private(set) var popupState: String?
+  /// Apps a terminal session can be showing in, for sessions that cannot say which one they
+  /// are in. Any app a wrapped shell was started from counts as well.
+  static let wellKnownTerminals: Set<String> = [
+    "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm", "org.alacritty", "io.alacritty", "dev.warp.Warp-Stable", "co.zeit.hyper",
+    "org.tabby", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.todesktop.230313mzl4w4u92",
+    "dev.zed.Zed", "com.anthropic.claudefordesktop", "com.openai.codex",
+  ]
+
+  /// Typing into sessions on request and showing command lines in the status are for testing
+  /// and debugging. They are on only when the app was started with `FIGO_DEBUG_TOOLS=1`.
+  public var debugTools = false
 
   private var peers: [Int: Peer] = [:]
   private var frontmostPid: Int32?
@@ -43,6 +55,7 @@ public final class AppCore {
     router.delegate = self
     presenter.isDisabled = { [unowned settings] in settings.bool(SettingKey.disable) == true }
     presenter.allowsBackgroundTerminal = ProcessInfo.processInfo.environment["FIGO_DEBUG_ALLOW_BACKGROUND"] == "1"
+    debugTools = ProcessInfo.processInfo.environment["FIGO_DEBUG_TOOLS"] == "1"
     presenter.decisionHeight = { [unowned settings] in
       CGFloat(settings.double(SettingKey.height).flatMap { $0 > 0 ? $0 : nil } ?? 140)
     }
@@ -116,6 +129,10 @@ public final class AppCore {
       onOpenSettings?()
       reply.send(.ok)
     case .simulateInput(let sessionId, let text):
+      guard debugTools else {
+        reply.send(.failure("Typing into sessions is a testing tool. Start Figo with FIGO_DEBUG_TOOLS=1 to use it."))
+        return
+      }
       do {
         try router.simulateInput(sessionId: sessionId, text: text)
         reply.send(.ok)
@@ -126,8 +143,17 @@ public final class AppCore {
   }
 
   public func status() -> AppStatus {
-    AppStatus(
-      version: Figo.version, pid: getpid(), sessions: router.summaries(), inputMethodConnected: inputMethod.isConnected,
+    var sessions = router.summaries()
+    if !debugTools {
+      // Anything running as this user can ask for the status. What is being typed, in every
+      // terminal, is not something to hand out by default.
+      for index in sessions.indices where sessions[index].editBuffer != nil {
+        sessions[index].editBuffer?.text = ""
+        sessions[index].editBuffer?.cursor = 0
+      }
+    }
+    return AppStatus(
+      version: Figo.version, pid: getpid(), sessions: sessions, inputMethodConnected: inputMethod.isConnected,
       focusedBundleId: inputMethod.focusedBundleId, caret: presenter.caret?.rect, popupVisible: presenter.isVisible,
       popupFrame: presenter.frame.map(ScreenRect.init), popupState: popupState)
   }
@@ -173,9 +199,15 @@ public final class AppCore {
     // Inside tmux the recorded terminal is whichever one started the tmux server, which may not
     // be the one the user is looking at now.
     let terminal = session.hello.insideTmux ? nil : session.hello.terminalBundleId
-    presenter.target = PopupTarget(
+    var target = PopupTarget(
       hasText: hasText, terminalBundleId: terminal, terminalPid: session.hello.insideTmux ? nil : session.hello.terminalPid,
       cursorCell: session.editBuffer?.cursorCell, grid: session.editBuffer?.grid)
+    if terminal == nil {
+      // tmux can be attached from a terminal no wrapped shell was ever started in.
+      target.possibleTerminalBundleIds = Self.wellKnownTerminals
+        .union(router.sessions.values.compactMap(\.hello.terminalBundleId))
+    }
+    presenter.target = target
   }
 
   func appInfo() -> AppInfo {
@@ -251,5 +283,6 @@ extension AppCore: BridgeHandler {
 
   public func pageWillLoad() {
     router.resetAnnouncements()
+    presenter.pageUnloaded()
   }
 }

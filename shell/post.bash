@@ -8,6 +8,10 @@
 # shown", so this relies on bash-preexec (bundled, MIT licence), which builds them from the
 # DEBUG trap and PROMPT_COMMAND. Written to work on the bash 3.2 that ships with macOS.
 
+# The login profile this is sourced from can be ~/.profile, which other shells read too (zsh
+# when its own startup files source it). Everything below is bash syntax.
+[ -n "${BASH_VERSION-}" ] || return 0
+
 if [[ $- == *i* && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "${_figo_loaded-}" ]]; then
   _figo_loaded=1
 
@@ -49,19 +53,24 @@ if [[ $- == *i* && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "${_fi
   # Other PROMPT_COMMAND entries (prompt themes) may rebuild PS1 on every prompt, after the
   # precmd functions have run. The wrapping therefore has to be the last thing that happens,
   # just before bash-preexec's own closing entry.
+  #
+  # Written for `set -u` as well: old versions of bash call an empty array, and the length of a
+  # plain variable asked for as an array, "unbound". PROMPT_COMMAND can only be an array from
+  # bash 5.1 on, so it is not looked at as one before that.
   _figo_arrange_prompt_command() {
     local wrap=_figo_wrap_prompt mode=__bp_interactive_mode
-    if (( ${#PROMPT_COMMAND[@]} > 1 )); then
+    if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) \
+       && (( ${#PROMPT_COMMAND[@]} > 1 )); then
       local last=$(( ${#PROMPT_COMMAND[@]} - 1 )) entry
-      local -a rebuilt
+      local -a rebuilt=()
       [[ "${PROMPT_COMMAND[last]}" == "$mode" && "${PROMPT_COMMAND[last - 1]}" == "$wrap" ]] && return
       for entry in "${PROMPT_COMMAND[@]}"; do
         [[ "$entry" == "$wrap" || "$entry" == "$mode" ]] || rebuilt+=("$entry")
       done
-      PROMPT_COMMAND=("${rebuilt[@]}" "$wrap" "$mode")
+      PROMPT_COMMAND=(${rebuilt[@]+"${rebuilt[@]}"} "$wrap" "$mode")
     else
-      [[ "$PROMPT_COMMAND" == *$'\n'"$wrap"$'\n'"$mode" ]] && return
-      local command="$PROMPT_COMMAND"
+      [[ "${PROMPT_COMMAND-}" == *$'\n'"$wrap"$'\n'"$mode" ]] && return
+      local command="${PROMPT_COMMAND-}"
       command=${command//$'\n'$wrap/}
       command=${command//$'\n'$mode/}
       PROMPT_COMMAND="${command}"$'\n'"$wrap"$'\n'"$mode"
@@ -101,22 +110,23 @@ if [[ $- == *i* && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "${_fi
       out+="${_figo_prefix}Aliases=${_figo_reply}"$'\a'
     fi
 
-    builtin printf '%s' "$out" >/dev/tty 2>/dev/null
+    # The error redirection comes first so that it also covers failing to open the terminal.
+    builtin printf '%s' "$out" 2>/dev/null >/dev/tty
 
     # Keep our hooks where they need to be: other startup code may have added its own since.
     if [[ "${precmd_functions[0]-}" != _figo_precmd ]]; then
-      local -a others
-      for name in "${precmd_functions[@]}"; do
+      local -a others=()
+      for name in ${precmd_functions[@]+"${precmd_functions[@]}"}; do
         [[ "$name" == _figo_precmd ]] || others+=("$name")
       done
-      precmd_functions=(_figo_precmd "${others[@]}")
+      precmd_functions=(_figo_precmd ${others[@]+"${others[@]}"})
     fi
     if [[ "${preexec_functions[0]-}" != _figo_preexec ]]; then
-      local -a others_preexec
-      for name in "${preexec_functions[@]}"; do
+      local -a others_preexec=()
+      for name in ${preexec_functions[@]+"${preexec_functions[@]}"}; do
         [[ "$name" == _figo_preexec ]] || others_preexec+=("$name")
       done
-      preexec_functions=(_figo_preexec "${others_preexec[@]}")
+      preexec_functions=(_figo_preexec ${others_preexec[@]+"${others_preexec[@]}"})
     fi
 
     # On the very first prompt bash-preexec installs itself as the last PROMPT_COMMAND entry,
@@ -129,7 +139,7 @@ if [[ $- == *i* && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "${_fi
 
   _figo_preexec() {
     _figo_escape "$1"
-    builtin printf '%s' "${_figo_prefix}PreExec=${_figo_reply}"$'\a' >/dev/tty 2>/dev/null
+    builtin printf '%s' "${_figo_prefix}PreExec=${_figo_reply}"$'\a' 2>/dev/null >/dev/tty
     _figo_unwrap_prompt
   }
 
@@ -138,8 +148,8 @@ if [[ $- == *i* && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "${_fi
   fi
 
   if [[ -n "${bash_preexec_imported-}" ]]; then
-    precmd_functions=(_figo_precmd "${precmd_functions[@]}")
-    preexec_functions=(_figo_preexec "${preexec_functions[@]}")
+    precmd_functions=(_figo_precmd ${precmd_functions[@]+"${precmd_functions[@]}"})
+    preexec_functions=(_figo_preexec ${preexec_functions[@]+"${preexec_functions[@]}"})
   else
     unset _figo_loaded
   fi

@@ -15,6 +15,17 @@ public enum SettingKey {
   public static let hideMenubarIcon = "app.hideMenubarIcon"
 }
 
+public enum SettingsError: Error, CustomStringConvertible {
+  case unreadableFile(String)
+
+  public var description: String {
+    switch self {
+    case .unreadableFile(let path):
+      return "\(path) is not valid JSON, so it was left as it is. Fix or delete it to change settings here."
+    }
+  }
+}
+
 /// The settings file: one flat JSON object with dotted keys (`{"autocomplete.height": 200}`).
 ///
 /// The file is the source of truth. Writes re-read it first so edits made by hand or by the CLI
@@ -28,6 +39,8 @@ public final class SettingsStore {
 
   private var observers: [UUID: Observer] = [:]
   private var watcher: DirectoryWatcher?
+  private var targetWatcher: DirectoryWatcher?
+  private var watchedTarget: String?
 
   public init(fileURL: URL) {
     self.fileURL = fileURL
@@ -55,8 +68,11 @@ public final class SettingsStore {
   }
 
   /// Sets `key`, or removes it when `value` is nil, and writes the file.
+  ///
+  /// Throws without writing when the file is there but cannot be understood: it is probably in
+  /// the middle of being edited by hand, and writing would throw that work away.
   public func set(_ key: String, _ value: JSONValue?) throws {
-    var fresh = readFile() ?? values
+    guard var fresh = readFile() else { throw SettingsError.unreadableFile(fileURL.path) }
     if let value, value != .null {
       fresh[key] = value
     } else {
@@ -104,7 +120,9 @@ public final class SettingsStore {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
     var data = try encoder.encode(JSONValue.object(settings))
     data.append(0x0a)
-    try data.write(to: fileURL, options: .atomic)
+    // Replacing the file through a symbolic link would replace the link; write to what it
+    // points at, as people who keep their settings in a dotfiles repository expect.
+    try data.write(to: fileURL.resolvingSymlinksInPath(), options: .atomic)
   }
 
   // MARK: - Watching
@@ -117,10 +135,31 @@ public final class SettingsStore {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     watcher = DirectoryWatcher(directory: directory) { [weak self] in
       self?.reload()
+      self?.watchLinkTarget()
+    }
+    watchLinkTarget()
+  }
+
+  /// When the settings file is a symbolic link (kept in a dotfiles repository), edits happen in
+  /// the folder it points into, which the watcher above never sees.
+  private func watchLinkTarget() {
+    let target = fileURL.resolvingSymlinksInPath().deletingLastPathComponent()
+    let linked = target.standardizedFileURL.path != fileURL.deletingLastPathComponent().standardizedFileURL.path
+    guard linked else {
+      targetWatcher = nil
+      watchedTarget = nil
+      return
+    }
+    guard watchedTarget != target.path else { return }
+    watchedTarget = target.path
+    targetWatcher = DirectoryWatcher(directory: target) { [weak self] in
+      self?.reload()
     }
   }
 
   public func stopWatching() {
     watcher = nil
+    targetWatcher = nil
+    watchedTarget = nil
   }
 }

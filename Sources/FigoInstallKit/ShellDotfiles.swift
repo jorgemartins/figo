@@ -79,7 +79,9 @@ public enum ShellDotfiles {
     for half in [Half.pre, Half.post] {
       while let index = lines.firstIndex(of: marker(half)) {
         var end = index + 1
-        if end < lines.count, isSourceLine(lines[end]) { end += 1 }
+        // Only the line exactly as Figo writes it goes with the marker. One that was added to
+        // (`…; export SOMETHING=1`) holds something of the user's and is left where it is.
+        if end < lines.count, isOwnLine(lines[end]) { end += 1 }
         // Take the blank line that was added to set the block apart, but only one.
         if half == .pre, end < lines.count, lines[end].isEmpty {
           end += 1
@@ -90,13 +92,18 @@ public enum ShellDotfiles {
         lines.removeSubrange(index..<end)
       }
     }
-    // A source line whose marker comment was deleted by hand is still ours.
-    lines.removeAll(where: isSourceLine)
+    // A source line whose marker comment was deleted by hand is still ours, as long as it is
+    // the whole line exactly as Figo writes it. One that was wrapped in something of the user's
+    // own (an `if`, a function) stays: taking it out could leave an empty block, which bash
+    // does not parse.
+    lines.removeAll(where: isOwnLine)
     return lines.joined(separator: "\n")
   }
 
-  private static func isSourceLine(_ line: String) -> Bool {
-    line.contains("/Library/Application Support/figo/shell/") && (line.contains("source"))
+  private static func isOwnLine(_ line: String) -> Bool {
+    Shell.allCases.contains { shell in
+      line == sourceLine(.pre, shell: shell) || line == sourceLine(.post, shell: shell)
+    }
   }
 
   // MARK: - Other products
@@ -104,6 +111,8 @@ public enum ShellDotfiles {
   private static let conflictSignatures: [(String, String)] = [
     ("kiro-cli/shell/", "Kiro CLI"),
     ("kiro-cli init ", "Kiro CLI"),
+    ("codewhisperer/shell/", "CodeWhisperer"),
+    ("/cw init ", "CodeWhisperer"),
     ("amazon-q/shell/", "Amazon Q"),
     ("/q init ", "Amazon Q"),
     (".fig/shell/", "Fig"),

@@ -39,7 +39,28 @@ private enum SettingsPane: Int, CaseIterable {
       case .keys: AnyView(KeysTab(model: model))
       case .setup: AnyView(SetupTab(model: model))
       }
-    return AnyView(pane.frame(width: Self.size.width, height: Self.size.height))
+    return AnyView(
+      pane
+        .safeAreaInset(edge: .bottom, spacing: 0) { SaveErrorBanner(model: model) }
+        .frame(width: Self.size.width, height: Self.size.height))
+  }
+}
+
+/// Says so when a change could not be written, which otherwise looks like a control that
+/// ignores clicks.
+private struct SaveErrorBanner: View {
+  @ObservedObject var model: SettingsModel
+
+  var body: some View {
+    if let message = model.saveError {
+      Label(message, systemImage: "exclamationmark.triangle.fill")
+        .font(.callout)
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(.yellow.opacity(0.2))
+    }
   }
 }
 
@@ -390,7 +411,7 @@ extension Color {
   static func themeColorComponents(_ text: String) -> (red: Double, green: Double, blue: Double, alpha: Double)? {
     var value = text.trimmingCharacters(in: .whitespaces).lowercased()
 
-    if value.hasPrefix("rgb"), let open = value.firstIndex(of: "("), let close = value.lastIndex(of: ")") {
+    if value.hasPrefix("rgb"), let open = value.firstIndex(of: "("), let close = value.lastIndex(of: ")"), open < close {
       let parts = value[value.index(after: open)..<close]
         .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "/" })
         .compactMap { Double($0) }

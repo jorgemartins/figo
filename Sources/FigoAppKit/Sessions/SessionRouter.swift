@@ -144,6 +144,10 @@ public final class SessionRouter {
   private func receiveEditBuffer(_ buffer: EditBuffer?, from sessionId: String) {
     sessions[sessionId]?.editBuffer = buffer
     if let buffer {
+      // The popup belongs to the tab that is being typed in. A command finishing in another tab
+      // draws a prompt there, and typing ahead even puts text on it, but neither moves the
+      // keyboard: taking the popup away would send the Enter meant for it to the shell.
+      if sessionId != currentSessionId, currentSession != nil, buffer.typed == false { return }
       currentSessionId = sessionId
       announceIfNeeded(sessionId)
       emit(.editBuffer(sessionId: sessionId, buffer: buffer.text, cursor: buffer.cursor))

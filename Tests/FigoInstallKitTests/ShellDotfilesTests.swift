@@ -73,12 +73,24 @@ private let postZsh = ShellDotfiles.sourceLine(.post, shell: .zsh)
     #expect(ShellDotfiles.conflictingProducts(in: kiro) == ["Kiro CLI"])
   }
 
-  @Test func updatesAnOlderBlockInPlace() {
-    let old = "# Figo pre block. Keep at the top of this file.\nsource \"$HOME/Library/Application Support/figo/shell/old-pre.zsh\"\n\nexport A=1\n"
-    let installed = ShellDotfiles.installing(in: old, shell: .zsh)
-    #expect(!installed.contains("old-pre.zsh"))
-    #expect(installed.components(separatedBy: preZsh).count == 2)
+  @Test func aLineTheUserAddedToIsKept() {
+    // Only the marker goes; what was appended to our line is the user's.
+    let edited = "# Figo pre block. Keep at the top of this file.\n\(preZsh); export KEEP_ME=important\n\nexport A=1\n"
+    let removed = ShellDotfiles.removing(from: edited)
+    #expect(removed.contains("export KEEP_ME=important"))
+    #expect(!removed.contains("# Figo pre block"))
+    let installed = ShellDotfiles.installing(in: edited, shell: .zsh)
+    #expect(installed.contains("export KEEP_ME=important"))
+    #expect(installed.hasPrefix("# Figo pre block. Keep at the top of this file.\n\(preZsh)\n"))
     #expect(installed.contains("export A=1"))
+  }
+
+  @Test func removalLeavesALineTheUserWrappedInTheirOwnBlock() {
+    // Taking the line out would leave `then` with nothing after it, which bash does not parse.
+    let content = "if [[ \"$TERM_PROGRAM\" != vscode ]]; then\n  \(preZsh)\nfi\nexport A=1\n"
+    #expect(ShellDotfiles.removing(from: content) == content)
+    // A bare copy of the line, without its marker comment, is still taken out.
+    #expect(ShellDotfiles.removing(from: preZsh + "\nexport A=1\n") == "export A=1\n")
   }
 
   @Test func disablingConflictsIsReversible() {
@@ -145,7 +157,7 @@ private let postZsh = ShellDotfiles.sourceLine(.post, shell: .zsh)
     try sandbox.write(".zshrc", "export A=1\n")
     try sandbox.write(".profile", "export B=2\n")
 
-    let changed = try sandbox.integration.install(assets: sandbox.assets)
+    let changed = try sandbox.integration.install(assets: sandbox.assets).changed
     #expect(changed.count == 6)
 
     #expect(sandbox.read(".zshrc")?.contains("export A=1") == true)
@@ -171,7 +183,8 @@ private let postZsh = ShellDotfiles.sourceLine(.post, shell: .zsh)
     #expect(status.conflicts.isEmpty)
 
     // A second install has nothing to do.
-    #expect(try sandbox.integration.install(assets: sandbox.assets).isEmpty)
+    let second = try sandbox.integration.install(assets: sandbox.assets)
+    #expect(second == ShellIntegration.Outcome())
   }
 
   @Test func backsUpBeforeChangingAndUninstallRestores() throws {
@@ -227,6 +240,155 @@ private let postZsh = ShellDotfiles.sourceLine(.post, shell: .zsh)
     try sandbox.integration.uninstall()
     #expect(sandbox.read(".zshrc") == kiroLine + "\nexport A=1\n")
     #expect(sandbox.read(".config/fish/conf.d/00_fig_pre.fish")?.hasPrefix("test -x") == true)
+  }
+
+  @Test func keepsAStartupFileThatIsNotUTF8() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    // "# configuração" in Latin-1, which is not valid UTF-8.
+    let original = Data("# configura".utf8) + Data([0xe7, 0xe3]) + Data("o\nexport A=1\n".utf8)
+    let file = sandbox.home.appendingPathComponent(".zshrc")
+    try original.write(to: file)
+
+    let outcome = try sandbox.integration.install(shells: [.zsh], assets: sandbox.assets)
+    #expect(outcome.skipped.isEmpty)
+    let installed = try Data(contentsOf: file)
+    #expect(installed.range(of: original) != nil, "the user's bytes are all still there")
+    #expect(installed.starts(with: Data("# Figo pre block".utf8)))
+    #expect(sandbox.integration.status(shells: [.zsh], assets: sandbox.assets).isInstalled(.zsh))
+
+    try sandbox.integration.uninstall(shells: [.zsh])
+    let restored = try Data(contentsOf: file)
+    #expect(restored == original)
+  }
+
+  @Test func leavesAnUnreadableStartupFileAlone() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    try sandbox.write(".zshrc", "export A=1\n")
+    let path = sandbox.home.appendingPathComponent(".zshrc").path
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path) }
+
+    let outcome = try sandbox.integration.install(shells: [.zsh], assets: sandbox.assets)
+    #expect(outcome.skipped.map(\.file.lastPathComponent) == [".zshrc"])
+    // The other file is still done.
+    #expect(outcome.changed.map(\.lastPathComponent) == [".zprofile"])
+    #expect(!sandbox.integration.status(shells: [.zsh], assets: sandbox.assets).isInstalled(.zsh))
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+    #expect(sandbox.read(".zshrc") == "export A=1\n")
+  }
+
+  @Test func doesNotCommentOutAConflictInsideABlock() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    let guarded = "if [ -f \"$HOME/.fig/shell/bashrc.pre.bash\" ]; then\n  . \"$HOME/.fig/shell/bashrc.pre.bash\"\nfi\nexport A=1\n"
+    try sandbox.write(".bashrc", guarded)
+
+    let outcome = try sandbox.integration.install(shells: [.bash], assets: sandbox.assets, disableConflicts: true)
+    #expect(outcome.skipped.map(\.file.lastPathComponent) == [".bashrc"])
+    let content = try #require(sandbox.read(".bashrc"))
+    #expect(content.contains(guarded), "commenting out two of the three lines would leave a stray fi")
+    #expect(!content.contains("[disabled by Figo]"))
+    // Figo's own lines still went in.
+    #expect(ShellDotfiles.isInstalled(in: content, shell: .bash))
+  }
+
+  @Test func doesNotCommentOutAConflictInAFileItCannotCheck() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    // `bash -n` does not run the shopt, so it rejects the pattern in the function: the file is
+    // fine when run, but nothing can be said about what an edit does to it.
+    let unverifiable =
+      "shopt -s extglob\nstrip() { echo \"${1##+(a)}\"; }\n"
+      + "if [ -f \"$HOME/.fig/shell/bashrc.pre.bash\" ]; then\n  . \"$HOME/.fig/shell/bashrc.pre.bash\"\nfi\n"
+    try sandbox.write(".bashrc", unverifiable)
+
+    let outcome = try sandbox.integration.install(shells: [.bash], assets: sandbox.assets, disableConflicts: true)
+    #expect(outcome.skipped.map(\.file.lastPathComponent) == [".bashrc"])
+    let content = try #require(sandbox.read(".bashrc"))
+    #expect(content.contains(unverifiable))
+    #expect(!content.contains("[disabled by Figo]"))
+    #expect(ShellDotfiles.isInstalled(in: content, shell: .bash))
+  }
+
+  @Test func uninstallKeepsAnEmptyFileThatWasThereBefore() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    // Kept empty on purpose: it stops bash from reading an old .profile.
+    try sandbox.write(".bash_profile", "")
+    try sandbox.write(".profile", "export OLD=1\n")
+    try sandbox.integration.install(shells: [.bash], assets: sandbox.assets)
+    #expect(ShellDotfiles.isInstalled(in: sandbox.read(".bash_profile") ?? "", shell: .bash))
+
+    try sandbox.integration.uninstall(shells: [.bash])
+    #expect(sandbox.read(".bash_profile") == "")
+    #expect(sandbox.read(".profile") == "export OLD=1\n")
+  }
+
+  @Test func backupsOfFilesWithTheSameNameDoNotCollide() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    let integration = sandbox.integration
+    #expect(integration.backupName(for: sandbox.home.appendingPathComponent(".zshrc")) == "dot.zshrc")
+    #expect(integration.backupName(for: sandbox.home.appendingPathComponent("dotfiles/zsh/.zshrc")) == "dotfiles__zsh__dot.zshrc")
+    #expect(
+      integration.backupName(for: sandbox.home.appendingPathComponent(".config/fish/conf.d/00_fig_pre.fish"))
+        == "dot.config__fish__conf.d__00_fig_pre.fish")
+  }
+
+  @Test func reinstallAndUninstallKeepAGuardTheUserPutAroundOurLine() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    let pre = ShellDotfiles.sourceLine(.pre, shell: .bash)
+    let custom = "if [[ \"$TERM_PROGRAM\" != vscode ]]; then\n  \(pre)\nfi\nexport A=1\n"
+    try sandbox.write(".bashrc", custom)
+
+    try sandbox.integration.install(shells: [.bash], assets: sandbox.assets)
+    #expect(sandbox.read(".bashrc")?.contains(custom) == true)
+    try sandbox.integration.uninstall(shells: [.bash])
+    #expect(sandbox.read(".bashrc") == custom)
+  }
+
+  @Test func uninstallCleansFilesBashNoLongerReads() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    let amazonQ = #"[[ -f "${HOME}/Library/Application Support/amazon-q/shell/profile.pre.bash" ]] && builtin source "${HOME}/Library/Application Support/amazon-q/shell/profile.pre.bash""#
+    try sandbox.write(".profile", amazonQ + "\nexport A=1\n")
+    try sandbox.integration.install(shells: [.bash], assets: sandbox.assets, disableConflicts: true)
+    #expect(sandbox.read(".profile")?.contains("# [disabled by Figo] ") == true)
+
+    // Another tool creates .bash_profile afterwards; bash now reads that one instead.
+    try sandbox.write(".bash_profile", "export B=2\n")
+    try sandbox.integration.uninstall(shells: [.bash])
+    #expect(sandbox.read(".profile") == amazonQ + "\nexport A=1\n")
+    #expect(sandbox.read(".bash_profile") == "export B=2\n")
+  }
+
+  @Test func uninstallRemovesFilesThatOnlyHeldOurLines() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    try sandbox.write(".zshrc", "export A=1\n")
+    try sandbox.integration.install(shells: [.zsh, .bash], assets: sandbox.assets)
+    #expect(sandbox.read(".zprofile") != nil)
+    #expect(sandbox.read(".bash_profile") != nil)
+
+    try sandbox.integration.uninstall(shells: [.zsh, .bash])
+    #expect(sandbox.read(".zprofile") == nil)
+    // An empty .bash_profile would stop bash from reading .profile.
+    #expect(sandbox.read(".bash_profile") == nil)
+    #expect(sandbox.read(".zshrc") == "export A=1\n")
+  }
+
+  @Test func aFileThatOnlyHoldsAConflictDoesNotCountAsInstalled() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.cleanUp() }
+    try sandbox.write(".config/fish/conf.d/00_fig_pre.fish", "test -x ~/.local/bin/kiro-cli; and eval (~/.local/bin/kiro-cli init fish pre | string split0)\n")
+    let status = sandbox.integration.status(assets: sandbox.assets)
+    #expect(status.conflicts == ["Kiro CLI"])
+    #expect(status.files.allSatisfy { !$0.installed })
+    #expect(!status.isInstalled(.fish))
   }
 
   @Test func detectsOutdatedAssets() throws {

@@ -241,6 +241,47 @@ class EveryShell(WrapperTestCase):
             s.command({"insert": {"text": "ran-it\n", "insertionBuffer": "echo "}})
             s.wait(lambda: s.of_kind("postExec") == [{"command": "echo ran-it", "exitCode": 0}], what="postExec")
 
+    def test_pasted_text_is_never_taken_as_keys(self):
+        # A terminal brackets a paste with markers. It can be far larger than one read and
+        # arrive in pieces; a Return or Tab inside it belongs to the shell, not to the popup.
+        s = self.start("zsh")
+        s.type("ech")
+        s.wait_buffer("ech")
+        s.command(intercept())
+        time.sleep(0.05)
+        s.clear()
+        body = "o " + "word\tword " * 900 + "end"
+        paste = "\x1b[200~" + body + "\x1b[201~"
+        for offset in range(0, len(paste), 1000):
+            s.type(paste[offset : offset + 1000])
+            time.sleep(0.03)
+        s.wait_buffer("ech" + body, timeout=15)
+        self.assertEqual(s.of_kind("key"), [])
+        # Afterwards keys are keys again.
+        s.type("\t")
+        s.wait(lambda: s.of_kind("key") == [{"action": "insertCommonPrefix"}], what="an intercepted tab")
+
+    def test_buffers_say_whether_keys_were_typed(self):
+        for shell in self.each_shell():
+            s = self.start(shell)
+
+            def typed():
+                return [payload["_0"]["typed"] for payload in s.of_kind("editBuffer") if payload.get("_0")]
+
+            # A tab that has just opened has the keyboard.
+            self.assertTrue(typed()[0])
+            s.type("sleep 0.4\r")
+            s.wait(lambda: s.of_kind("preExec"), what="preExec")
+            # Typed ahead while the command runs: on the next command line, but not a sign that
+            # this tab still has the focus by then.
+            s.type("ec")
+            s.wait_prompt(2)
+            s.wait_buffer("ec")
+            self.assertFalse(typed()[-1])
+            s.type("h")
+            s.wait_buffer("ech")
+            self.assertTrue(typed()[-1])
+
     def test_simulated_input_goes_through_interception(self):
         for shell in self.each_shell():
             s = self.start(shell)
@@ -352,6 +393,18 @@ class Robustness(WrapperTestCase):
         s.wait_output("30 100")
         s.type("exit 5\r")
         self.assertEqual(s.exit_status(), 5)
+
+    def test_output_that_empties_the_screen_does_not_stop_the_wrapper(self):
+        # Deleting a line on the last row, and scrolling by more than the screen holds, move
+        # every row out at once.
+        s = self.start("zsh")
+        s.type("printf '\\e[24;1H\\e[M\\e[99S\\e[99T\\e[H\\e[99L'; echo done-$((6*7))\r")
+        s.wait_output("done-42")
+        s.wait_prompt(2)
+        s.type("pwd")
+        s.wait_buffer("pwd")
+        # Private sequences are still being taken out of the output.
+        self.assertNotIn("6977", s.text())
 
     def test_local_bin_is_on_the_path_before_the_rest_of_the_startup_file(self):
         # Startup files written while Fig was installed may call tools from ~/.local/bin.
@@ -472,6 +525,31 @@ class Zsh(WrapperTestCase):
         s.type("pwd")
         s.wait_buffer("pwd")
         self.assertNotIn("6977", s.text())
+
+    def test_survives_strict_options_set_in_the_startup_file(self):
+        # With ERR_EXIT a hook that ends on a false test takes the shell down, and KSH_ARRAYS
+        # changes what every array subscript means.
+        s = self.start("zsh", rc="setopt ERR_EXIT KSH_ARRAYS")
+        s.type("echo strict-$((6*7))\r")
+        s.wait_output("strict-42")
+        s.wait_prompt(2)
+        s.type("echo again-$((7*7))")
+        s.wait_buffer("echo again-$((7*7))")
+        s.type("\r")
+        s.wait_output("again-49")
+        self.assertEqual([m["command"] for m in s.of_kind("postExec")], ["echo strict-$((6*7))", "echo again-$((7*7))"])
+
+    def test_bash_scripts_sourced_by_zsh_do_nothing(self):
+        # ~/.profile gets the bash lines when there is no .bash_profile, and zsh setups source
+        # that file too.
+        rc = f'source "{SHELL_SCRIPTS}/pre.bash"\nsource "{SHELL_SCRIPTS}/post.bash"'
+        s = self.start("zsh", rc=rc)
+        s.type("echo fine-$((6*7))\r")
+        s.wait_output("fine-42")
+        s.wait_prompt(2)
+        self.assertEqual(s.of_kind("shell")[-1]["_0"]["shell"], "zsh")
+        for complaint in ("bad option", "not found", "shopt"):
+            self.assertNotIn(complaint, s.text())
 
     def test_interrupted_line_starts_empty(self):
         s = self.start("zsh")
@@ -624,6 +702,21 @@ class Bash(WrapperTestCase):
         s.wait_prompt(2)
         s.type("pwd")
         s.wait_buffer("pwd")
+
+    def test_strict_unset_mode(self):
+        # The bash that ships with macOS calls an empty array "unbound" under `set -u`.
+        for when in ("before", "after"):
+            with self.subTest(set_u=when):
+                s = self.start("bash", rc="set -u" if when == "before" else "")
+                if when == "after":
+                    s.type("set -u\r")
+                    s.wait_prompt(2)
+                s.type("echo strict-$((6*7))\r")
+                s.wait_output("strict-42")
+                s.type("echo again-$((7*7))")
+                s.wait_buffer("echo again-$((7*7))")
+                self.assertNotIn("unbound variable", s.text())
+                self.assertIn("echo strict-$((6*7))", [m["command"] for m in s.of_kind("postExec")])
 
     def test_wrapped_long_line(self):
         s = self.start("bash", columns=30)

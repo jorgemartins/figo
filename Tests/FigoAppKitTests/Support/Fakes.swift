@@ -113,8 +113,8 @@ func eventually(timeout: Duration = .seconds(5), _ condition: () -> Bool) async 
   return condition()
 }
 
-func editBuffer(_ text: String, cursor: Int? = nil) -> EditBuffer {
+func editBuffer(_ text: String, cursor: Int? = nil, typed: Bool? = nil) -> EditBuffer {
   EditBuffer(
     text: text, cursor: cursor ?? text.utf16.count, cursorCell: GridPosition(row: 0, column: text.count),
-    grid: GridSize(rows: 24, columns: 80))
+    grid: GridSize(rows: 24, columns: 80), typed: typed)
 }

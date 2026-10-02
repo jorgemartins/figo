@@ -108,6 +108,10 @@ import Testing
     #expect(abs(compact.blue - 199.0 / 255) < 0.0001)
     let short = try #require(Color.themeColorComponents("#000"))
     #expect(short.red == 0 && short.alpha == 1)
+    // Nonsense is no colour; it must not stop the app.
+    for nonsense in ["rgb)(", "rgb(", "rgb)1,2,3(", "rgba(1,2)", "#12", ""] {
+      #expect(Color.themeColorComponents(nonsense) == nil, "\(nonsense)")
+    }
     let translucent = try #require(Color.themeColorComponents("#ADD7FF40"))
     #expect(abs(translucent.alpha - 64.0 / 255) < 0.0001)
     #expect(abs(translucent.red - 173.0 / 255) < 0.0001)

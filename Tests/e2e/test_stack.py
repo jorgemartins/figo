@@ -36,6 +36,8 @@ class FullStack(unittest.TestCase):
         # No terminal window exists to measure, so give the popup a caret near a screen corner.
         # Keys are only handed to the popup while it is actually on screen.
         cls.env["FIGO_DEBUG_CARET"] = "40,400,1,15"
+        # `figo status` only includes command lines when the app was started for debugging.
+        cls.env["FIGO_DEBUG_TOOLS"] = "1"
         cls.app = subprocess.Popen(
             [os.path.join(BUNDLE, "FigoApp")],
             env={**os.environ, **cls.env},

@@ -70,6 +70,11 @@ public final class Wrapper {
   private var childStatus: Int32?
 
   private var escapeDeadline: UInt64?
+  /// Whether keys have arrived since the last command finished; see `EditBuffer.typed`.
+  private var keysSincePrompt = false
+  private var inputEvidence = InputEvidence.Tracker()
+  private var hasPublishedBuffer = false
+  private var lastPublishedTyped = false
   private var insertionDeadline: UInt64?
   private var publishDeadline: UInt64?
   private var nextConnectAttempt: UInt64 = 0
@@ -244,11 +249,16 @@ public final class Wrapper {
       case .preExec:
         interceptor.reset()
         flushPendingKeys()
+        keyParser.endPaste()
         insertionDeadline = nil
         publishDeadline = nil
         app.send(.preExec)
         lastPublished = .some(nil)
       case .postExec(let command, let exitCode):
+        // Keys typed while the command ran are in the next command line, but they do not say
+        // that this tab still has the focus now that it has finished. (Not on every prompt:
+        // themes and Ctrl-L redraw the prompt in the middle of a line.)
+        keysSincePrompt = false
         app.send(.postExec(command: command, exitCode: exitCode))
       }
     }
@@ -258,20 +268,43 @@ public final class Wrapper {
   private func publishEditBuffer() {
     guard app.isConnected, insertionDeadline == nil else { return }
     let current = session.editBuffer()
-    if case .some(let published) = lastPublished, published == current { return }
+    let typed = keysSincePrompt || !hasPublishedBuffer
+    // The same command line is sent again only to say that it is now being typed in.
+    if case .some(let published) = lastPublished, published == current, current == nil || lastPublishedTyped || !typed {
+      return
+    }
     // Before the first prompt there is nothing to retract.
     if current == nil && lastPublished == nil { return }
     lastPublished = .some(current)
-    app.send(.editBuffer(current))
+    var outgoing = current
+    outgoing?.typed = typed
+    if current != nil {
+      hasPublishedBuffer = true
+      lastPublishedTyped = typed
+    }
+    app.send(.editBuffer(outgoing))
   }
 
   // MARK: - Keyboard input
 
   private func handleInput(_ bytes: [UInt8]) {
     connectIfNeeded(now: Self.now())
+    switch inputEvidence.observe(bytes) {
+    case .typing, .focusGained:
+      if !keysSincePrompt {
+        keysSincePrompt = true
+        // The command line may not change (coming back to a tab with text already on it), but
+        // whose turn it is has: say so.
+        if publishDeadline == nil { publishDeadline = Self.now() + Self.publishDelay }
+      }
+    case .focusLost: keysSincePrompt = false
+    case .nothing: break
+    }
     guard interceptor.isActive, !session.isExecuting else {
-      // Nothing can be intercepted, so do not spend time looking at the bytes.
+      // Nothing can be intercepted, so the bytes are not parsed; they are only watched for a
+      // paste starting, which may still be arriving when interception begins.
       flushPendingKeys()
+      keyParser.observe(bytes)
       inputQueue.append(contentsOf: bytes)
       return
     }
@@ -362,6 +395,8 @@ public final class Wrapper {
       }
 
     case .simulateInput(let text):
+      // A testing tool for the command line; never a way to type into a running program.
+      guard !session.isExecuting else { return }
       handleInput(Array(text.utf8))
     }
   }

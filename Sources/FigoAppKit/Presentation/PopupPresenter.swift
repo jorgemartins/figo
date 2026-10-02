@@ -17,6 +17,7 @@ public enum HideReason: String, Sendable {
   case focusMoved
   case spaceChanged
   case sessionEnded
+  case pageUnloaded
 }
 
 /// What the presenter needs to know about the session the popup belongs to.
@@ -32,6 +33,10 @@ public struct PopupTarget: Equatable, Sendable {
   /// terminal does not report it.
   public var cursorCell: GridPosition?
   public var grid: GridSize?
+  /// For a session whose own terminal is not known (inside tmux it is whichever one started
+  /// the tmux server): the terminals it could be showing in. The popup then only shows while
+  /// one of these is frontmost, rather than over any app at all. Empty skips the check.
+  public var possibleTerminalBundleIds: Set<String> = []
 
   public init(
     hasText: Bool, terminalBundleId: String?, terminalPid: Int32? = nil, cursorCell: GridPosition? = nil,
@@ -148,6 +153,13 @@ public final class PopupPresenter {
     return flags(for: placement(size: size, anchor: anchor))
   }
 
+  /// The page is reloading or its process died. What it asked to be shown no longer stands, and
+  /// while the popup counts as visible the wrapper keeps Enter, Tab and the arrows from the shell.
+  public func pageUnloaded() {
+    requestedSize = nil
+    hide(.pageUnloaded)
+  }
+
   public func hide(_ reason: HideReason) {
     guard isVisible else { return }
     isVisible = false
@@ -228,7 +240,10 @@ public final class PopupPresenter {
       // Two copies of the same terminal can be running; only the session's own counts.
       return front?.pid == pid
     }
-    guard let bundleId = target.terminalBundleId else { return true }
+    guard let bundleId = target.terminalBundleId else {
+      guard !target.possibleTerminalBundleIds.isEmpty, let frontBundleId = front?.bundleId else { return true }
+      return target.possibleTerminalBundleIds.contains(frontBundleId)
+    }
     return front?.bundleId == bundleId
   }
 

@@ -56,11 +56,17 @@ if [[ -o interactive && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "
     # the markers.
     PS1=${${PS1#"%{${_figo_start}%}"}%"%{${_figo_end}${_figo_newcmd}%}"}
     PS2=${${PS2#"%{${_figo_start}%}"}%"%{${_figo_end}%}"}
-    [[ -n "${RPS1-}" ]] && RPS1=${${RPS1#"%{${_figo_start}%}"}%"%{${_figo_end}%}"}
+    if [[ -n "${RPS1-}" ]]; then
+      RPS1=${${RPS1#"%{${_figo_start}%}"}%"%{${_figo_end}%}"}
+    fi
   }
 
+  # Every hook starts with `emulate -L zsh`: options the user's configuration turns on (ERR_EXIT,
+  # KSH_ARRAYS, SH_WORD_SPLIT, NO_UNSET) would otherwise change what this code means, and with
+  # ERR_EXIT a hook that ends on a false test takes the whole shell down.
   _figo_precmd() {
     local figo_status=$?
+    emulate -L zsh
     local out="${_figo_prefix}PreCmd"$'\a'"${_figo_prefix}ExitCode=${figo_status}"$'\a'
     local name line REPLY
 
@@ -116,15 +122,18 @@ if [[ -o interactive && -n "${FIGO_SESSION_ID-}" && -z "${FIGO_HELPER-}" && -z "
   }
 
   _figo_preexec() {
+    emulate -L zsh
     local REPLY
     _figo_escape "$1"
     builtin print -rn -u $_figo_fd -- "${_figo_prefix}PreExec=${REPLY}"$'\a'
     _figo_unwrap_prompts
+    return 0
   }
 
   # zsh knows exactly what is on the command line and where the cursor is, so it reports it
   # rather than leaving the wrapper to read it off the screen. \c marks the cursor.
   _figo_report_buffer() {
+    emulate -L zsh
     [[ "$CONTEXT" == start || "$CONTEXT" == cont ]] || return 0
     local left="${PREBUFFER}${LBUFFER}" REPLY
     local current="${left}"$'\0'"${RBUFFER}"

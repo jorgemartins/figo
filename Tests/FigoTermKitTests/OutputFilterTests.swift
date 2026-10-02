@@ -71,6 +71,24 @@ private func filtered(_ chunks: String...) -> String {
     #expect(plan("status\n", "git ", "git ") == "status\r")
   }
 
+  @Test func controlCharactersAreNeverTyped() {
+    // A file name can contain anything. To the line editor these are key presses: ^U clears the
+    // line and a carriage return runs it.
+    // Nothing is typed at all: with the control characters taken out it would be another word.
+    #expect(plan("guide\u{15}open -a Calculator\r.md", "cat ", "cat ") == "")
+    for hostile in ["a\tb", "a\u{1b}b", "a\u{03}", "a\u{7f}", "\u{0}", "a\u{9b}31mb", "a\u{1b}[2Jb", "tail\u{1b}"] {
+      #expect(plan(hostile, nil, nil) == "", "\(Array(hostile.utf8))")
+    }
+    // Only the last character can be the newline that runs the command.
+    #expect(plan("one\ntwo\n", nil, nil) == "")
+    #expect(plan("one two\n", nil, nil) == "one two\r")
+    // The cursor movements and backspace the popup uses still go through, and so does any text.
+    #expect(plan("\u{08}'x y'\u{1b}[D\u{1b}[C", nil, nil) == "\u{08}'x y'\u{1b}[D\u{1b}[C")
+    #expect(plan("é漢🚀 Â\u{a0}", nil, nil) == "é漢🚀 Â\u{a0}")
+    // Nor are they retyped from the command line the suggestion was computed against.
+    #expect(plan("x", "git che\rck", "git c") == "")
+  }
+
   @Test func deletesWhatWasTypedSinceTheSuggestionWasComputed() {
     #expect(plan("\u{08}\u{08}Sites/", "cd si", "cd sit") == "\u{08}\u{08}\u{08}Sites/")
     #expect(plan("x", "é", "é🚀e\u{301}") == "\u{08}\u{08}x")

@@ -9,6 +9,7 @@
 #   FIGO_CONFIGURATION           release (default) or debug
 #   FIGO_SIGN_IDENTITY           codesign identity (default: - for ad-hoc)
 #   FIGO_BUNDLE_DIR              where Figo.app is assembled (default: build)
+#   FIGO_ALLOW_PARTIAL_BUNDLE    set to carry on when the CLI or the wrapper does not build
 #   FIGO_SKIP_COMMUNITY_THEMES   set to leave Fig's own themes out of the bundle
 set -euo pipefail
 
@@ -20,7 +21,7 @@ for arg in "$@"; do
   case "$arg" in
     --skip-web) skip_web=1 ;;
     -h | --help)
-      sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -45,7 +46,9 @@ warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 if [[ $skip_web -eq 0 ]]; then
   step "Building the web page"
   pnpm --dir web build
-  if [[ ! -d specs/dist ]]; then
+  # Rebuilt whenever the pinned commit changes, not only when there is no build at all.
+  specs_pin="$(sed -n 's/.*"commit": "\([0-9a-f]*\)".*/\1/p' specs/package.json | head -n 1)"
+  if ! grep -q "\"commit\":\"$specs_pin\"" specs/dist/index.json 2>/dev/null; then
     step "Building completion specs"
     node specs/build.mjs
   fi
@@ -61,15 +64,18 @@ step "Building FigoApp and FigoInputMethod ($configuration)"
 swift_build FigoApp
 swift_build FigoInputMethod
 
-# The CLI and the pty wrapper are developed separately; a broken or placeholder build of either
-# must not stop the app from being assembled.
+# An app without its CLI or its wrapper cannot be installed, so a build without them fails.
+# FIGO_ALLOW_PARTIAL_BUNDLE=1 carries on, for working on the app while one of them is broken.
 optional_products=()
 for product in figo figoterm; do
   step "Building $product"
   if swift_build "$product"; then
     optional_products+=("$product")
-  else
+  elif [[ -n "${FIGO_ALLOW_PARTIAL_BUNDLE:-}" ]]; then
     warn "$product did not build; the bundle will not contain it"
+  else
+    echo "error: $product did not build (set FIGO_ALLOW_PARTIAL_BUNDLE=1 to bundle without it)" >&2
+    exit 1
   fi
 done
 
@@ -155,6 +161,17 @@ mkdir -p "$contents/Resources/shell"
 cp shell/*.zsh shell/*.bash shell/*.fish shell/*.sh shell/*.md "$contents/Resources/shell/"
 
 cp LICENSE THIRD_PARTY_NOTICES.md "$contents/Resources/"
+
+# --- Strip --------------------------------------------------------------------------------------
+
+# The linker leaves a debug map in each executable: the full path of every source and object
+# file on the machine that built it. Nothing at run time uses it, and it has no business in a
+# build that is handed to other people. This has to happen before signing.
+step "Stripping debug symbols"
+strip -S -x "$contents/MacOS/FigoApp" "$helper/Contents/MacOS/FigoInputMethod"
+for product in "${optional_products[@]+"${optional_products[@]}"}"; do
+  strip -S -x "$contents/MacOS/$product"
+done
 
 # --- Sign, innermost first ----------------------------------------------------------------------
 

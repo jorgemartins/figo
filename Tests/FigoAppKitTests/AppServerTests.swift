@@ -39,6 +39,7 @@ import Testing
   }
 
   @Test func terminalAndInputMethodSessionEndToEnd() async throws {
+    core.debugTools = true
     let server = try startServer()
     defer { server.stop() }
 
@@ -123,6 +124,28 @@ import Testing
     // And so does the input method.
     inputMethod.disconnect()
     #expect(await eventually { !core.inputMethod.isConnected })
+  }
+
+  @Test func typingIntoSessionsAndReadingCommandLinesNeedTheDebugSwitch() async throws {
+    let server = try startServer()
+    defer { server.stop() }
+    let hello = TerminalHello(sessionId: "s", pid: 1, terminalBundleId: "com.mitchellh.ghostty")
+    let terminal = try TestClient(path: server.path, hello: ClientHello(role: .terminal, terminal: hello))
+    defer { terminal.disconnect() }
+    try terminal.send(TerminalMessage.editBuffer(editBuffer("export TOKEN=secret")))
+    #expect(await eventually { core.router.currentSessionId == "s" })
+
+    // Anything running as the same user can connect as the CLI.
+    let cli = try TestClient(path: server.path, hello: ClientHello(role: .cli))
+    let status = try await fetchStatus(via: cli)
+    #expect(status.sessions.count == 1)
+    #expect(status.sessions.first?.editBuffer?.text == "")
+    try cli.send(CLIRequest.simulateInput(sessionId: nil, text: "ls\n"))
+    guard case .failure = try await cli.receive(CLIResponse.self) else {
+      Issue.record("typing into a session should be refused")
+      return
+    }
+    #expect(core.router.currentSession?.editBuffer?.text == "export TOKEN=secret")
   }
 
   @Test func focusMovingToAnotherClientHidesThePopup() async throws {

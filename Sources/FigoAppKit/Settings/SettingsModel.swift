@@ -12,6 +12,8 @@ final class SettingsModel: ObservableObject {
   @Published private(set) var themes: [ThemeEntry] = []
   @Published private(set) var launchAtLogin = false
   @Published var loginItemMessage: String?
+  /// Why the last change could not be written, until one is.
+  @Published private(set) var saveError: String?
   @Published private(set) var inputMethodStatus: InputMethodStatus?
   @Published private(set) var setupMessage: String?
   @Published private(set) var isWorking = false
@@ -43,8 +45,10 @@ final class SettingsModel: ObservableObject {
   func set(_ key: String, _ value: JSONValue?) {
     do {
       try store.set(key, value)
+      saveError = nil
     } catch {
       log.error("writing \(key) failed: \(error)")
+      saveError = (error as? SettingsError)?.description ?? "The setting could not be saved: \(error.localizedDescription)"
     }
   }
 

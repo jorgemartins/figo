@@ -58,6 +58,33 @@ import Testing
     #expect(store.double("a") == 1)
   }
 
+  @Test func setLeavesAFileItCannotUnderstandAlone() throws {
+    try write(#"{"a": 1}"#)
+    let store = SettingsStore(fileURL: file)
+    store.reload()
+    // Half-way through a hand edit: a comment and a trailing comma.
+    let edited = "{\n  // bigger\n  \"a\": 2,\n}\n"
+    try write(edited)
+    #expect(throws: SettingsError.self) { try store.set("autocomplete.width", .number(400)) }
+    let onDisk = try String(contentsOf: file, encoding: .utf8)
+    #expect(onDisk == edited)
+    #expect(store.double("a") == 1)
+  }
+
+  @Test func setWritesThroughASymbolicLink() throws {
+    let target = directory.appendingPathComponent("dotfiles-settings.json")
+    try Data(#"{"a": 1}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+    let store = SettingsStore(fileURL: file)
+    store.reload()
+    try store.set("b", .number(2))
+
+    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+    #expect(attributes[.type] as? FileAttributeType == .typeSymbolicLink)
+    let saved = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: target))
+    #expect(saved == .object(["a": .number(1), "b": .number(2)]))
+  }
+
   @Test func setWritesTheFileAndKeepsOutsideEdits() throws {
     try write(#"{"a": 1}"#)
     let store = SettingsStore(fileURL: file)
@@ -88,6 +115,24 @@ import Testing
     let new: [String: JSONValue] = ["a": .number(2), "c": .null]
     #expect(SettingsStore.changedKeys(from: old, to: new) == ["a", "b", "c"])
     #expect(SettingsStore.changedKeys(from: old, to: old).isEmpty)
+  }
+
+  @Test func watcherFollowsASymbolicLinkToWhereTheFileIs() async throws {
+    // Settings kept in a dotfiles repository and linked into place: edits happen over there.
+    let repository = try makeTemporaryDirectory("settings-dotfiles")
+    defer { try? FileManager.default.removeItem(at: repository) }
+    let target = repository.appendingPathComponent("figo-settings.json")
+    try Data(#"{"autocomplete.theme": "dusk"}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+    let store = SettingsStore(fileURL: file)
+    store.reload()
+    #expect(store.string("autocomplete.theme") == "dusk")
+    store.startWatching()
+    defer { store.stopWatching() }
+    try await Task.sleep(for: .milliseconds(300))
+    try Data(#"{"autocomplete.theme": "moss"}"#.utf8).write(to: target)
+    #expect(await eventually(timeout: .seconds(10)) { store.string("autocomplete.theme") == "moss" })
   }
 
   @Test func watcherPicksUpOutsideChanges() async throws {

@@ -167,10 +167,16 @@ so publishing is all it takes to ship an update. A release leaves Fig's themes o
 
 ### Debugging
 
-- `figo status` shows what the app knows: sessions, the current command line, what the popup is showing.
+- `figo status` shows what the app knows: sessions and what the popup is showing.
+- `FIGO_DEBUG_TOOLS=1` in the app's environment adds each session's command line to `figo status`
+  and turns on `figo debug type`, which types into a session. Both are off otherwise, because
+  any program running as you can ask the app for them.
 - Logs are in `~/Library/Application Support/figo/logs`. `FIGO_LOG_LEVEL=debug` says more.
 - `FIGO_TERM_TRACE=<file>` makes a wrapper record everything its shell writes.
 - `FIGO_DISABLED=1` starts a shell without the wrapper.
+- If a new terminal window closes as soon as it opens, the wrapper could not start. Open a
+  shell without it (in Terminal: Shell › New Command…, then `env FIGO_DISABLED=1 zsh`) and run
+  `figo doctor`, or `figo uninstall`.
 
 ## Licence
 

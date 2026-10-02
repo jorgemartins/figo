@@ -27,11 +27,20 @@ fail() {
 }
 
 # Downloads Fig's themes and copies them into the user's themes folder with the given `figo`.
+# A theme that is already there is left alone: it may have been edited.
 fetch_themes() {
   say "Fetching Fig's themes"
   if curl -fsSL "https://codeload.github.com/withfig/themes/tar.gz/$themes_commit" | tar -xz -C "$work" 2>/dev/null \
     && [ -d "$work/themes-$themes_commit/themes" ]; then
-    "$1" theme import "$work/themes-$themes_commit/themes"
+    existing="${FIGO_CONFIG_DIR:-${FIGO_HOME:-$HOME}/.config/figo}/themes"
+    for theme in "$work/themes-$themes_commit/themes"/*.json; do
+      if [ -e "$existing/$(basename "$theme")" ]; then rm -f "$theme"; fi
+    done
+    if ls "$work/themes-$themes_commit/themes"/*.json >/dev/null 2>&1; then
+      "$1" theme import "$work/themes-$themes_commit/themes"
+    else
+      echo "They are all there already."
+    fi
   else
     return 1
   fi
@@ -59,6 +68,8 @@ main() {
   done
 
   [ "$(uname -s)" = "Darwin" ] || fail "Figo only runs on macOS."
+  # As root everything this writes, in the home folder too, would end up owned by root.
+  [ "$(id -u)" -ne 0 ] || fail "run this as yourself, without sudo."
 
   if [ "$themes_only" -eq 1 ]; then
     if [ -x "$target/Contents/MacOS/figo" ]; then
@@ -77,7 +88,12 @@ main() {
   macos="$(sw_vers -productVersion)"
   [ "${macos%%.*}" -ge 14 ] || fail "Figo needs macOS 14 or later; this Mac has $macos."
   [ -d "$app_dir" ] && [ -w "$app_dir" ] \
-    || fail "cannot write to $app_dir. Set FIGO_APP_DIR to a folder you own, such as ~/Applications."
+    || fail "cannot write to $app_dir. Install into a folder you own instead: curl ... | FIGO_APP_DIR=~/Applications sh"
+  # Whatever is at that path is about to be replaced; make sure it is an earlier Figo.
+  if [ -e "$target" ]; then
+    [ "$(defaults read "$target/Contents/Info" CFBundleIdentifier 2>/dev/null)" = "dev.figo.Figo" ] \
+      || fail "$target is not Figo; move it away first."
+  fi
 
   work="$(mktemp -d "${TMPDIR:-/tmp}/figo-install.XXXXXX")"
   trap 'rm -rf "$work"' EXIT

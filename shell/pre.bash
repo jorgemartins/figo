@@ -5,6 +5,10 @@
 # pseudo-terminal so that Figo can follow what is being typed. See pre.zsh for the reasoning
 # behind each condition.
 
+# The login profile this is sourced from can be ~/.profile, which other shells read too (zsh
+# when its own startup files source it). Everything below is bash syntax.
+[ -n "${BASH_VERSION-}" ] || return 0
+
 # Fig put ~/.local/bin on the PATH for every shell, and startup files written since may count
 # on it being there. It is also where the `figo` command is linked.
 if [[ -d "${HOME}/.local/bin" && ":${PATH}:" != *":${HOME}/.local/bin:"* ]]; then
